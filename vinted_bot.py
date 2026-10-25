@@ -53,8 +53,8 @@ SEARCHES = [
         "exclude": ["enfant", "lot", "défaut"],  # mots interdits dans le titre
     },
     {
-        "name": " Bas Nike phenom elite",
-        "search_text": "Bas Nike phenom elite",
+        "name": "  Nike running  phenom elite",
+        "search_text": "Nike running phenom elite",
         "price_from": 1,
         "price_to": 20,
         "exclude": ["pour pièces", "défectueux", "boîte vide"],
