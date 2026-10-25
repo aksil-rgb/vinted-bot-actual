@@ -47,8 +47,8 @@ DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
 SEARCHES = [
     {
-        "name": "nike tech, pull teck , nike kangourou",
-        "search_text": "Nike tech",
+        "name": "nike",
+        "search_text": "Nike",
         "price_to": 15,
         "exclude": ["enfant", "lot", "défaut"],  # mots interdits dans le titre
     },
