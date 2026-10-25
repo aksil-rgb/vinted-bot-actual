@@ -49,7 +49,7 @@ SEARCHES = [
     {
         "name": "Stone",
         "search_text": "Stone",
-        "price_to": 15,
+        "price_to": 50,
         "exclude": ["enfant", "lot", "défaut"],  # mots interdits dans le titre
     },
     {
@@ -60,7 +60,6 @@ SEARCHES = [
         "exclude": ["pour pièces", "défectueux", "boîte vide", "chaussure", "short", "legging","1.1",],
         # "extra": {"attribute_ids[brand]": "53"},  # filtre Vinted optionnel (53 = Nike)
     },
-]
   {
         "name": "Under armour",
         "search_text": "Under Armour",
