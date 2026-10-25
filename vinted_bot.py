@@ -54,7 +54,7 @@ SEARCHES = [
     },
     {
         "name": "  Nike running ",
-        "search_text": "Nike running","Under Armour coldgear" ,
+        "search_text": "Nike running, Under Armour coldgear" ,
         "price_from": 1,
         "price_to": 50,
         "exclude": ["pour pièces", "défectueux", "boîte vide", "chaussure", "short", "legging","1.1",],
