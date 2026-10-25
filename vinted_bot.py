@@ -49,7 +49,7 @@ SEARCHES = [
     {
         "name": "nike tech",
         "search_text": "Nike tech",
-        "price_to": 15,
+        "price_to": 10,
         "exclude": ["enfant", "lot", "défaut"],  # mots interdits dans le titre
     },
     {
