@@ -41,7 +41,7 @@ except ImportError:
 # ───────────────────────────── CONFIGURATION ─────────────────────────────
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8694226548:AAE3aeMPbl27AC-v5tcA903iDC0YPfn4OME")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "hunter_vinted_bot")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "8694226548")
 
 DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
@@ -58,7 +58,7 @@ SEARCHES = [
         "price_from": 80,
         "price_to": 150,
         "exclude": ["pour pièces", "défectueux", "boîte vide"],
-        # "extra": {"catalog_ids": "3025", "brand_ids": "53"},  # filtres Vinted (optionnel)
+        # "extra": {"attribute_ids[brand]": "53"},  # filtre Vinted optionnel (53 = Nike)
     },
 ]
 
@@ -75,6 +75,8 @@ USER_AGENT = (
     "(KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36"
 )
 ACCEPT_LANGUAGE = "fr-FR,fr;q=0.9,en;q=0.8"
+API_HOST = "api." + DOMAIN.replace("www.", "", 1)  # api.vinted.fr
+TOKEN_MAX_AGE = 6 * 3600  # on renouvelle le token Vinted toutes les 6 h
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s  %(message)s", datefmt="%H:%M:%S")
 log = logging.getLogger("vinted-bot")
@@ -89,54 +91,87 @@ class Blocked(Exception):
 class VintedClient:
     def __init__(self):
         self.session = None
+        self.token = None
+        self.anon_id = None
+        self.token_time = 0.0
         self.refresh()
 
+    def _cookie(self, name):
+        """Dernière valeur non vide d'un cookie (Vinted en envoie d'abord une vide)."""
+        jar = getattr(self.session.cookies, "jar", self.session.cookies)
+        values = [c.value for c in jar if c.name == name and c.value]
+        return values[-1] if values else None
+
     def refresh(self):
-        """(Re)crée une session et récupère les cookies comme un navigateur."""
+        """Nouvelle session + token anonyme (cookie access_token_web), comme le site."""
         if cffi_requests:
             self.session = cffi_requests.Session(impersonate="chrome")
         else:
             self.session = requests.Session()
             self.session.headers["User-Agent"] = USER_AGENT
-        r = self.session.get(
-            f"https://{DOMAIN}/",
-            headers={"Accept-Language": ACCEPT_LANGUAGE},
-            timeout=20,
-        )
+        url = f"https://{DOMAIN}/catalog"
+        headers = {"Accept-Language": ACCEPT_LANGUAGE}
+        r = self.session.head(url, headers=headers, timeout=20, allow_redirects=True)
         if r.status_code in (403, 429):
             raise Blocked(r.status_code)
-        log.info("Session Vinted initialisée (HTTP %s)", r.status_code)
+        self.token = self._cookie("access_token_web")
+        if not self.token:  # plan B : la vraie page (lourde) donne aussi le cookie
+            r = self.session.get(url, headers=headers, timeout=60)
+            if r.status_code in (403, 429):
+                raise Blocked(r.status_code)
+            self.token = self._cookie("access_token_web")
+        if not self.token:
+            raise RuntimeError("token Vinted introuvable (cookie access_token_web)")
+        self.anon_id = self._cookie("anon_id")
+        self.token_time = time.time()
+        log.info("Session Vinted initialisée (token reçu)")
 
     def search(self, params):
-        url = f"https://{DOMAIN}/api/v2/catalog/items"
-        headers = {
-            "Accept": "application/json, text/plain, */*",
-            "Accept-Language": ACCEPT_LANGUAGE,
-            "Referer": f"https://{DOMAIN}/catalog",
-        }
-        r = self.session.get(url, params=params, headers=headers, timeout=20)
-        if r.status_code == 401:  # cookies expirés : on repart d'une session neuve
+        if time.time() - self.token_time > TOKEN_MAX_AGE:
             self.refresh()
+        url = f"https://{API_HOST}/svc-catalogue/items"
+        for attempt in (1, 2):
+            headers = {
+                "Accept": "application/json, text/plain, */*",
+                "Accept-Language": ACCEPT_LANGUAGE,
+                "Authorization": f"Bearer {self.token}",
+                "Origin": f"https://{DOMAIN}",
+                "Referer": f"https://{DOMAIN}/",
+            }
+            if self.anon_id:
+                headers["x-anon-id"] = self.anon_id
             r = self.session.get(url, params=params, headers=headers, timeout=20)
-        if r.status_code in (403, 429):
+            if r.status_code in (401, 403) and attempt == 1:
+                self.refresh()  # token expiré ou refusé : on en demande un neuf
+                continue
+            break
+        if r.status_code in (401, 403, 429):
             raise Blocked(r.status_code)
-        r.raise_for_status()
-        return r.json().get("items", [])
+        if r.status_code == 404:
+            raise RuntimeError("HTTP 404 : Vinted a encore changé son API, le bot est à mettre à jour")
+        if r.status_code >= 400:
+            raise RuntimeError(f"HTTP {r.status_code} : {r.text[:200]}")
+        data = r.json()
+        if "items" not in data:
+            log.warning("Réponse inattendue de Vinted (clés : %s)", ", ".join(data.keys()))
+        return data.get("items") or []
 
 
 # ───────────────────────────── OUTILS ─────────────────────────────
 
 def parse_price(item):
-    """Retourne (montant, devise) quel que soit le format renvoyé par Vinted."""
-    p = item.get("price")
-    if isinstance(p, dict):
-        amount, cur = p.get("amount"), p.get("currency_code", "EUR")
-    else:
-        amount, cur = p, item.get("currency", "EUR")
-    try:
-        return float(amount), cur
-    except (TypeError, ValueError):
-        return 0.0, cur
+    """Retourne (montant, devise), ou (None, devise) si le prix est introuvable."""
+    for key in ("price", "total_item_price"):
+        p = item.get(key)
+        if isinstance(p, dict):
+            amount, cur = p.get("amount"), p.get("currency_code", "EUR")
+        else:
+            amount, cur = p, item.get("currency", "EUR")
+        try:
+            return float(amount), cur
+        except (TypeError, ValueError):
+            continue
+    return None, "EUR"
 
 
 def is_excluded(title, words):
@@ -144,19 +179,32 @@ def is_excluded(title, words):
     return any(re.search(rf"\b{re.escape(w.lower())}\b", t) for w in words)
 
 
+def item_url(item):
+    url = item.get("url") or ""
+    if url.startswith("/"):  # l'API renvoie maintenant des liens relatifs
+        return f"https://{DOMAIN}{url}"
+    return url or f"https://{DOMAIN}/items/{item['id']}"
+
+
 def build_caption(item, search_name):
     title = html.escape(item.get("title") or "Sans titre")
     amount, cur = parse_price(item)
     symbol = "€" if cur == "EUR" else cur
-    details = [item.get("brand_title"), item.get("size_title"), item.get("status")]
-    details = [html.escape(str(d)) for d in details if d]
-    url = item.get("url") or f"https://{DOMAIN}/items/{item['id']}"
+    price = f"{amount:.2f} {symbol}" if amount is not None else "prix : voir l'annonce"
 
-    lines = [f"🆕 <b>{title}</b>", f"💶 <b>{amount:.2f} {symbol}</b>"]
+    box = item.get("item_box") if isinstance(item.get("item_box"), dict) else {}
+    details = [
+        item.get("brand_title") or box.get("first_line"),  # marque
+        box.get("second_line")  # "taille · état"
+        or " · ".join(str(d) for d in (item.get("size_title"), item.get("status")) if d),
+    ]
+    details = [html.escape(str(d)) for d in details if d]
+
+    lines = [f"🆕 <b>{title}</b>", f"💶 <b>{price}</b>"]
     if details:
         lines.append(" · ".join(details))
     lines.append(f"🔎 {html.escape(search_name)}")
-    lines.append(f'<a href="{html.escape(url)}">Voir sur Vinted</a>')
+    lines.append(f'<a href="{html.escape(item_url(item))}">Voir sur Vinted</a>')
     return "\n".join(lines)
 
 
@@ -223,6 +271,7 @@ def run_cycle(client, seen, initialized):
             if key in s:
                 params[key] = s[key]
         params.update(s.get("extra", {}))
+        params = {k: v for k, v in params.items() if v not in (None, "")}  # filtres vides = erreur 400
 
         items = client.search(params)
         first_time = s["name"] not in initialized  # 1er passage : on mémorise sans alerter
