@@ -53,10 +53,10 @@ SEARCHES = [
         "exclude": ["enfant", "lot", "défaut"],  # mots interdits dans le titre
     },
     {
-        "name": "Nike phenom elite",
-        "search_text": "Nike phenom elite",
+        "name": " Bas Nike phenom elite",
+        "search_text": "Bas Nike phenom elite",
         "price_from": 1,
-        "price_to": 50,
+        "price_to": 20,
         "exclude": ["pour pièces", "défectueux", "boîte vide"],
         # "extra": {"attribute_ids[brand]": "53"},  # filtre Vinted optionnel (53 = Nike)
     },
