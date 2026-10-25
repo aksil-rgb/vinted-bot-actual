@@ -56,7 +56,7 @@ SEARCHES = [
         "name": "  Nike running",
         "search_text": "Nike running",
         "price_from": 1,
-        "price_to": 90,
+        "price_to": 60,
         "exclude": ["pour pièces", "défectueux", "boîte vide"],
         # "extra": {"attribute_ids[brand]": "53"},  # filtre Vinted optionnel (53 = Nike)
     },
