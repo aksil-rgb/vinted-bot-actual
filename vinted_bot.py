@@ -54,7 +54,7 @@ SEARCHES = [
     },
     {
         "name": "  Nike running ",
-        "search_text": "Nike running authentique",
+        "search_text": "Nike running",
         "price_from": 1,
         "price_to": 60,
         "exclude": ["pour pièces", "défectueux", "boîte vide"],
