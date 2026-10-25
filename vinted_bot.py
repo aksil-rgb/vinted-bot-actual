@@ -63,7 +63,7 @@ SEARCHES = [
   {
         "name": "Under armour",
         "search_text": "Under Armour",
-        "price_to": 45,
+        "price_to": 50,
         "exclude": ["enfant", "lot", "défaut"],
     },
 ]
