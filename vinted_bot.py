@@ -47,24 +47,23 @@ DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
 SEARCHES = [
     {
-        "name": "nike",
-        "search_text": "Nike",
+        "name": "Stone",
+        "search_text": "Stone",
         "price_to": 15,
         "exclude": ["enfant", "lot", "défaut"],  # mots interdits dans le titre
     },
     {
-        "name": "  Nike running ",
-        "search_text": "Nike running, Under Armour coldgear" ,
+        "name": "  Nike ",
+        "search_text": "Nike" ,
         "price_from": 1,
         "price_to": 50,
         "exclude": ["pour pièces", "défectueux", "boîte vide", "chaussure", "short", "legging","1.1",],
         # "extra": {"attribute_ids[brand]": "53"},  # filtre Vinted optionnel (53 = Nike)
     },
 ]
-SEARCHES = [
   {
-        "name": "Ps4",
-        "search_text": "Ps4",
+        "name": "Under armour",
+        "search_text": "Under Armour",
         "price_to": 45,
         "exclude": ["enfant", "lot", "défaut"],
     },
