@@ -48,13 +48,13 @@ DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 SEARCHES = [
     {
         "name": "nike tech",
-        "search_text": "Nike tech kangourou aviateur pull tech fleece",
-        "price_to": 10,
+        "search_text": "Nike tech",
+        "price_to": 15,
         "exclude": ["enfant", "lot", "défaut"],  # mots interdits dans le titre
     },
     {
         "name": "  Nike running ",
-        "search_text": "Nike running phenom elite aeroswift coldgear under armour strid ensemble essential",
+        "search_text": "Nike running",
         "price_from": 1,
         "price_to": 50,
         "exclude": ["pour pièces", "défectueux", "boîte vide", "chaussure", "short", "legging","1.1",],
