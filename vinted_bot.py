@@ -47,14 +47,14 @@ DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
 SEARCHES = [
     {
-        "name": "coldgear",
-        "search_text": "coldgear under armour",
+        "name": "yezzy",
+        "search_text": "yezzy 350",
         "price_to": 30,
         "exclude": ["enfant", "lot", "défaut"],  # mots interdits dans le titre
     },
     {
-        "name": "  Nike tech aviateur",
-        "search_text": "Nike tech aviateur",
+        "name": "  Nike running ",
+        "search_text": "Nike running authentique",
         "price_from": 1,
         "price_to": 60,
         "exclude": ["pour pièces", "défectueux", "boîte vide"],
