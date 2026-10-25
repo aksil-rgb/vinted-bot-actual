@@ -62,12 +62,13 @@ SEARCHES = [
     },
 ]
 SEARCHES = [
-    {
-        "name": "Ps4"
+  {
+        "name": "Ps4",
         "search_text": "Ps4",
-        "price_to": 15,
-        "exclude": ["enfant", "lot", "défaut"],  # mots interdits dans le titre
+        "price_to": 45,
+        "exclude": ["enfant", "lot", "défaut"],
     },
+]
 
 CYCLE_DELAY = (45, 90)    # pause entre deux tours complets (secondes)
 SEARCH_DELAY = (5, 12)    # pause entre deux recherches d'un même tour
