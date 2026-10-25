@@ -56,7 +56,7 @@ SEARCHES = [
         "name": "  Nike running  phenom elite",
         "search_text": "Nike running phenom elite",
         "price_from": 1,
-        "price_to": 20,
+        "price_to": 90,
         "exclude": ["pour pièces", "défectueux", "boîte vide"],
         # "extra": {"attribute_ids[brand]": "53"},  # filtre Vinted optionnel (53 = Nike)
     },
