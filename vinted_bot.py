@@ -47,14 +47,14 @@ DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
 SEARCHES = [
     {
-        "name": "Nike Tech Fleece",
-        "search_text": "nike tech fleece",
-        "price_to": 15,
+        "name": "coldgear",
+        "search_text": "coldgear under armour",
+        "price_to": 30,
         "exclude": ["enfant", "lot", "défaut"],  # mots interdits dans le titre
     },
     {
-        "name": "  Nike running  phenom elite",
-        "search_text": "Nike running phenom elite",
+        "name": "  Nike running",
+        "search_text": "Nike running",
         "price_from": 1,
         "price_to": 90,
         "exclude": ["pour pièces", "défectueux", "boîte vide"],
