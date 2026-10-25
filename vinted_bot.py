@@ -53,8 +53,8 @@ SEARCHES = [
         "exclude": ["enfant", "lot", "défaut"],  # mots interdits dans le titre
     },
     {
-        "name": "  Nike running",
-        "search_text": "Nike running",
+        "name": "  Nike tech aviateur",
+        "search_text": "Nike tech aviateur",
         "price_from": 1,
         "price_to": 60,
         "exclude": ["pour pièces", "défectueux", "boîte vide"],
