@@ -47,7 +47,7 @@ DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
 SEARCHES = [
     {
-        "name": "nike tech",
+        "name": "nike tech, pull teck , nike kangourou"
         "search_text": "Nike tech",
         "price_to": 15,
         "exclude": ["enfant", "lot", "défaut"],  # mots interdits dans le titre
@@ -61,6 +61,13 @@ SEARCHES = [
         # "extra": {"attribute_ids[brand]": "53"},  # filtre Vinted optionnel (53 = Nike)
     },
 ]
+SEARCHES = [
+    {
+        "name": "Ps4"
+        "search_text": "Ps4",
+        "price_to": 15,
+        "exclude": ["enfant", "lot", "défaut"],  # mots interdits dans le titre
+    },
 
 CYCLE_DELAY = (45, 90)    # pause entre deux tours complets (secondes)
 SEARCH_DELAY = (5, 12)    # pause entre deux recherches d'un même tour
