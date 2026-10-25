@@ -53,10 +53,10 @@ SEARCHES = [
         "exclude": ["enfant", "lot", "défaut"],  # mots interdits dans le titre
     },
     {
-        "name": "Switch OLED",
-        "search_text": "nintendo switch oled",
-        "price_from": 80,
-        "price_to": 150,
+        "name": "Nike phenom elite",
+        "search_text": "Nike phenom elite",
+        "price_from": 1,
+        "price_to": 50,
         "exclude": ["pour pièces", "défectueux", "boîte vide"],
         # "extra": {"attribute_ids[brand]": "53"},  # filtre Vinted optionnel (53 = Nike)
     },
