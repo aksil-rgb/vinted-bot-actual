@@ -40,8 +40,8 @@ except ImportError:
 
 # ───────────────────────────── CONFIGURATION ─────────────────────────────
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8694226548:AAE3aeMPbl27AC-v5tcA903iDC0YPfn4OME")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7446117467")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "COLLE_TON_TOKEN_ICI")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "COLLE_TON_CHAT_ID_ICI")
 
 DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
@@ -83,6 +83,9 @@ ALERT_ALL_NEW = True      # True : toutes les nouvelles annonces + les bonnes of
 SILENT_NEW = True         # les annonces normales arrivent sans son, les alertes importantes sonnent
 BARGAIN_MAX = 10          # "bon plan" : prix maximum (€) pour les articles de "bargain_keywords"
                           # réglable par recherche avec la clé "bargain_max"
+ENRICH_SELLER = True      # affiche la note et le nombre d'avis du vendeur (alertes importantes seulement)
+SHIPPING_ESTIMATE = None  # ex. 3.89 : prix de la livraison la moins chère que tu paies d'habitude ;
+                          # s'il est renseigné, le message affiche un total "livraison comprise (estimation)"
 BASELINE_PAGES = 3        # pages de 20 annonces utilisées pour estimer le prix du marché
 BASELINE_REFRESH = 6 * 3600  # le prix du marché est recalculé toutes les 6 h
 MIN_SAMPLE = 10           # en dessous, trop peu d'annonces pour comparer
@@ -114,6 +117,9 @@ class VintedClient:
         self.token = None
         self.anon_id = None
         self.token_time = 0.0
+        self.seller_cache = {}
+        self.seller_failures = 0
+        self.seller_disabled = False
         self.refresh()
 
     def _cookie(self, name):
@@ -146,21 +152,24 @@ class VintedClient:
         self.token_time = time.time()
         log.info("Session Vinted initialisée (token reçu)")
 
+    def _headers(self):
+        headers = {
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": ACCEPT_LANGUAGE,
+            "Authorization": f"Bearer {self.token}",
+            "Origin": f"https://{DOMAIN}",
+            "Referer": f"https://{DOMAIN}/",
+        }
+        if self.anon_id:
+            headers["x-anon-id"] = self.anon_id
+        return headers
+
     def search(self, params):
         if time.time() - self.token_time > TOKEN_MAX_AGE:
             self.refresh()
         url = f"https://{API_HOST}/svc-catalogue/items"
         for attempt in (1, 2):
-            headers = {
-                "Accept": "application/json, text/plain, */*",
-                "Accept-Language": ACCEPT_LANGUAGE,
-                "Authorization": f"Bearer {self.token}",
-                "Origin": f"https://{DOMAIN}",
-                "Referer": f"https://{DOMAIN}/",
-            }
-            if self.anon_id:
-                headers["x-anon-id"] = self.anon_id
-            r = self.session.get(url, params=params, headers=headers, timeout=20)
+            r = self.session.get(url, params=params, headers=self._headers(), timeout=20)
             if r.status_code in (401, 403) and attempt == 1:
                 self.refresh()  # token expiré ou refusé : on en demande un neuf
                 continue
@@ -175,6 +184,35 @@ class VintedClient:
         if "items" not in data:
             log.warning("Réponse inattendue de Vinted (clés : %s)", ", ".join(data.keys()))
         return data.get("items") or []
+
+    def seller_stats(self, user_id):
+        """(note sur 5, nombre d'avis) du vendeur, ou None. En cache, ne bloque jamais le bot."""
+        if not ENRICH_SELLER or not user_id or self.seller_disabled:
+            return None
+        if user_id in self.seller_cache:
+            return self.seller_cache[user_id]
+        stats = None
+        try:
+            r = self.session.get(
+                f"https://{DOMAIN}/api/v2/users/{user_id}", headers=self._headers(), timeout=15
+            )
+            if r.status_code == 200:
+                user = r.json().get("user") or {}
+                reputation, count = user.get("feedback_reputation"), user.get("feedback_count")
+                if reputation is not None and count is not None:
+                    reputation = float(reputation)
+                    stats = (reputation * 5 if reputation <= 1 else reputation, int(count))
+            else:
+                self.seller_failures += 1
+                log.info("Avis du vendeur indisponibles (HTTP %s)", r.status_code)
+        except Exception as e:
+            self.seller_failures += 1
+            log.info("Avis du vendeur indisponibles (%s)", type(e).__name__)
+        if self.seller_failures >= 3:
+            self.seller_disabled = True
+            log.warning("Avis des vendeurs désactivés après 3 échecs : le bot continue sans")
+        self.seller_cache[user_id] = stats
+        return stats
 
 
 # ───────────────────────────── OUTILS ─────────────────────────────
@@ -206,6 +244,51 @@ def item_url(item):
     return url or f"https://{DOMAIN}/items/{item['id']}"
 
 
+def seller_of(item):
+    """(id, pseudo, lien du profil) du vendeur, quand l'annonce les contient."""
+    user = item.get("user") if isinstance(item.get("user"), dict) else {}
+    uid, login = user.get("id"), user.get("login")
+    url = user.get("profile_url") or (f"https://{DOMAIN}/member/{uid}" if uid else None)
+    if url and url.startswith("/"):
+        url = f"https://{DOMAIN}{url}"
+    return uid, login, url
+
+
+def parse_total(item):
+    """Prix avec protection acheteur (total_item_price), ou None."""
+    p = item.get("total_item_price")
+    if isinstance(p, dict):
+        p = p.get("amount")
+    try:
+        return float(p)
+    except (TypeError, ValueError):
+        return None
+
+
+def published_text(item):
+    """Date de publication si l'annonce en porte une, sinon l'heure à laquelle le bot l'a vue."""
+    hi = (item.get("photo") or {}).get("high_resolution") or {}
+    ts = item.get("created_at_ts") or hi.get("timestamp")
+    try:
+        ts = float(ts)
+        if ts > 1e11:  # millisecondes
+            ts /= 1000
+        age = max(0, int(time.time() - ts))
+    except (TypeError, ValueError):
+        return "Détecté à " + time.strftime("%H:%M")
+    if age < 3600:
+        return f"Publié il y a {max(1, age // 60)} min"
+    if age < 86400:
+        return f"Publié il y a {age // 3600} h"
+    return f"Publié il y a {age // 86400} j"
+
+
+def fmt_rating(note, count):
+    if not count:
+        return "aucun avis"
+    return f"{note:.1f}".replace(".", ",") + f"/5 ({count} avis)"
+
+
 def matches_any(title, words):
     """Vrai si le titre contient un des mots (début de mot : "phenom" trouve "phenome")."""
     t = (title or "").lower()
@@ -219,11 +302,11 @@ def fmt_price(amount, symbol):
     return f"{text.replace('.', ',')} {symbol}"
 
 
-def build_caption(item, search_name, deal=None, label="Nouveau"):
+def build_caption(item, search_name, deal=None, label="Nouveau", seller=None, with_link=True):
     title = html.escape(item.get("title") or "Sans titre")
     amount, cur = parse_price(item)
     symbol = "€" if cur == "EUR" else cur
-    price = fmt_price(amount, symbol) if amount is not None else "prix : voir l'annonce"
+    price = fmt_price(amount, symbol) if amount is not None else "prix : voir l’annonce"
 
     box = item.get("item_box") if isinstance(item.get("item_box"), dict) else {}
     details = [
@@ -233,18 +316,35 @@ def build_caption(item, search_name, deal=None, label="Nouveau"):
     ]
     details = [html.escape(str(d)) for d in details if d]
 
-    link_text = "Ouvrir l'annonce"
     lines = [
         f"<b>{html.escape(label)}</b> · {html.escape(search_name)}",
         title,
         " · ".join([f"<b>{price}</b>"] + details),
     ]
+
+    total = parse_total(item)
+    totals = []
+    if total and amount is not None and total > amount:
+        totals.append(f"{fmt_price(total, symbol)} avec protection acheteur")
+    base = total or amount
+    if SHIPPING_ESTIMATE and base:
+        totals.append(f"≈ {fmt_price(base + SHIPPING_ESTIMATE, symbol)} livraison comprise (estimation)")
+    if totals:
+        lines.append("Total : " + " · ".join(totals))
+
     if deal and deal[0] > 0 and label != "Nouveau":  # deal = (remise %, prix médian, nb d'annonces)
         discount, market, _ = deal
         lines.append(f"-{discount} % sous le marché (~{market:.0f} {symbol})")
         if discount >= 75:
-            lines.append("Attention : prix très bas, vérifie l'annonce (arnaque, défaut, accessoire ?)")
-    lines.append(f'<a href="{html.escape(item_url(item))}">{link_text}</a>')
+            lines.append("Attention : prix très bas, vérifie l’annonce (arnaque, défaut, accessoire ?)")
+
+    _, login, _ = seller_of(item)
+    if login or seller:
+        parts = ([html.escape(str(login))] if login else []) + ([fmt_rating(*seller)] if seller else [])
+        lines.append("Vendeur : " + " · ".join(parts))
+    lines.append(published_text(item))
+    if with_link:
+        lines.append(f'<a href="{html.escape(item_url(item))}">Ouvrir l’annonce</a>')
     return "\n".join(lines)
 
 
@@ -273,17 +373,25 @@ def telegram(method, chat_id, **payload):
     return r.ok
 
 
-def notify(item, search_name, deal=None, chats=None, label="Nouveau", silent=False):
-    caption = build_caption(item, search_name, deal, label)
+def notify(item, search_name, deal=None, chats=None, label="Nouveau", silent=False, seller=None):
+    caption = build_caption(item, search_name, deal, label, seller, with_link=False)
+    plain = build_caption(item, search_name, deal, label, seller, with_link=True)
+    buttons = [{"text": "Acheter", "url": item_url(item)}]
+    profile = seller_of(item)[2]
+    if profile:
+        buttons.append({"text": "Vendeur", "url": profile})
+    markup = {"inline_keyboard": [buttons]}
     photo = (item.get("photo") or {}).get("url")
     for chat_id in chats or parse_chat_ids(TELEGRAM_CHAT_ID):
         sent = False
         if photo:
-            sent = telegram("sendPhoto", chat_id, photo=photo, caption=caption,
-                            parse_mode="HTML", disable_notification=silent)
+            sent = telegram("sendPhoto", chat_id, photo=photo, caption=caption, parse_mode="HTML",
+                            reply_markup=markup, disable_notification=silent)
         if not sent:
-            telegram("sendMessage", chat_id, text=caption,
-                     parse_mode="HTML", disable_notification=silent)
+            sent = telegram("sendMessage", chat_id, text=caption, parse_mode="HTML",
+                            reply_markup=markup, disable_notification=silent)
+        if not sent:  # dernier recours : texte seul avec un lien
+            telegram("sendMessage", chat_id, text=plain, parse_mode="HTML", disable_notification=silent)
 
 
 # ───────────────────────────── ÉTAT (anti-doublons) ─────────────────────────────
@@ -399,8 +507,11 @@ def run_cycle(client, seen, initialized, market_cache=None):
                 continue  # ni bon plan, ni bonne offre, et les nouveautés ne sont pas demandées
 
             label = "BON PLAN" if is_bargain else "BONNE OFFRE" if is_deal else "Nouveau"
+            stats = None
+            if label != "Nouveau":  # la note du vendeur coûte une requête : alertes importantes seulement
+                stats = client.seller_stats(seller_of(item)[0])
             notify(item, s["name"], deal, chats, label=label,
-                   silent=SILENT_NEW and label == "Nouveau")
+                   silent=SILENT_NEW and label == "Nouveau", seller=stats)
             new += 1
             important += label != "Nouveau"
             time.sleep(1.1)  # on reste sous la limite d'envoi de Telegram
