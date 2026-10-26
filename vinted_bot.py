@@ -40,8 +40,8 @@ except ImportError:
 
 # ───────────────────────────── CONFIGURATION ─────────────────────────────
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8694226548:AAE3aeMPbl27AC-v5tcA903iDC0YPfn4OME")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7446117467")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "COLLE_TON_TOKEN_ICI")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "COLLE_TON_CHAT_ID_ICI")
 
 DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
@@ -73,6 +73,7 @@ CYCLE_DELAY = (45, 90)    # pause entre deux tours complets (secondes)
 SEARCH_DELAY = (5, 12)    # pause entre deux recherches d'un même tour
 FIRST_BLOCK_PAUSE = 300   # pause initiale si Vinted bloque (5 min), doublée à chaque fois
 MAX_BLOCK_PAUSE = 3600    # ...jusqu'à 1 h maximum
+PER_PAGE = 50             # annonces lues par recherche et par tour (20 avant)
 
 # Détection des bonnes affaires : le bot compare chaque nouvelle annonce au prix médian
 # des annonces récentes de la même recherche (sans plafond de prix, "price_from" conservé).
@@ -120,6 +121,7 @@ class VintedClient:
         self.seller_cache = {}
         self.seller_failures = 0
         self.seller_disabled = False
+        self.max_per_page = None
         self.refresh()
 
     def _cookie(self, name):
@@ -167,6 +169,8 @@ class VintedClient:
     def search(self, params):
         if time.time() - self.token_time > TOKEN_MAX_AGE:
             self.refresh()
+        if self.max_per_page and params.get("per_page", 0) > self.max_per_page:
+            params = {**params, "per_page": self.max_per_page}
         url = f"https://{API_HOST}/svc-catalogue/items"
         for attempt in (1, 2):
             r = self.session.get(url, params=params, headers=self._headers(), timeout=20)
@@ -176,6 +180,10 @@ class VintedClient:
             break
         if r.status_code in (401, 403, 429):
             raise Blocked(r.status_code)
+        if r.status_code == 400 and params.get("per_page", 0) > 20:
+            log.warning("Vinted refuse %s résultats par page : retour à 20", params["per_page"])
+            self.max_per_page = 20
+            return self.search(params)
         if r.status_code == 404:
             raise RuntimeError("HTTP 404 : Vinted a encore changé son API, le bot est à mettre à jour")
         if r.status_code >= 400:
@@ -399,7 +407,10 @@ def notify(item, search_name, deal=None, chats=None, label="Nouveau", silent=Fal
 def load_state():
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
-        return set(data.get("seen", [])), set(data.get("initialized", []))
+        seen, initialized = set(data.get("seen", [])), set(data.get("initialized", []))
+        if data.get("per_page", 20) != PER_PAGE:  # nouvelle taille de page : on mémorise sans alerter
+            initialized = set()
+        return seen, initialized
     except (OSError, ValueError):
         return set(), set()
 
@@ -407,7 +418,7 @@ def load_state():
 def save_state(seen, initialized):
     recent = sorted(seen)[-5000:]  # les ids Vinted augmentent : on garde les plus récents
     STATE_FILE.write_text(
-        json.dumps({"seen": recent, "initialized": sorted(initialized)}),
+        json.dumps({"seen": recent, "initialized": sorted(initialized), "per_page": PER_PAGE}),
         encoding="utf-8",
     )
 
@@ -425,7 +436,7 @@ def build_params(s, for_market=False):
     params = {
         "search_text": s["search_text"],
         "order": "newest_first",
-        "per_page": 20,
+        "per_page": PER_PAGE,
         "page": 1,
     }
     for key in (("price_from",) if for_market else ("price_from", "price_to")):
