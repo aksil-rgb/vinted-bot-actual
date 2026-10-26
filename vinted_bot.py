@@ -47,24 +47,21 @@ DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
 SEARCHES = [
     {
-        "name": "Nike tech",
-        "search_text": "Nike tech",
-        "price_to": 50,
+        "name": "Nike Tech Fleece",
+        "search_text": "nike tech fleece",
+        "price_to": 15,
+        "min_discount": 6,  # alerte seulement si -30 % ou plus sous le prix du marché
+        # "chat_id": "987654321",  # optionnel : envoyer cette recherche à d'autres personnes
         "exclude": ["enfant", "lot", "défaut"],  # mots interdits dans le titre
     },
     {
-        "name": "  Nike ",
-        "search_text": "Nike" ,
-        "price_from": 1,
-        "price_to": 50,
-        "exclude": ["pour pièces", "défectueux", "boîte vide", "chaussure", "short", "legging","1.1","AIR", "chaussures" , "shoes",],
+        "name": "Switch OLED",
+        "search_text": "nintendo switch oled",
+        "price_from": 80,
+        "price_to": 150,
+        "min_discount": 20,
+        "exclude": ["pour pièces", "défectueux", "boîte vide"],
         # "extra": {"attribute_ids[brand]": "53"},  # filtre Vinted optionnel (53 = Nike)
-    },
-  {
-        "name": "Under armour",
-        "search_text": "Under Armour",
-        "price_to": 50,
-        "exclude": ["enfant", "lot", "défaut"],
     },
 ]
 
@@ -72,6 +69,14 @@ CYCLE_DELAY = (45, 90)    # pause entre deux tours complets (secondes)
 SEARCH_DELAY = (5, 12)    # pause entre deux recherches d'un même tour
 FIRST_BLOCK_PAUSE = 300   # pause initiale si Vinted bloque (5 min), doublée à chaque fois
 MAX_BLOCK_PAUSE = 3600    # ...jusqu'à 1 h maximum
+
+# Détection des bonnes affaires : le bot compare chaque nouvelle annonce au prix médian
+# des annonces récentes de la même recherche (sans plafond de prix, "price_from" conservé).
+MIN_DISCOUNT = 25         # % minimum sous le prix du marché pour être alerté (0 = tout alerter)
+                          # réglable par recherche avec la clé "min_discount"
+BASELINE_PAGES = 3        # pages de 20 annonces utilisées pour estimer le prix du marché
+BASELINE_REFRESH = 6 * 3600  # le prix du marché est recalculé toutes les 6 h
+MIN_SAMPLE = 10           # en dessous, trop peu d'annonces pour comparer
 
 # ─────────────────────────────────────────────────────────────────────────
 
@@ -192,7 +197,7 @@ def item_url(item):
     return url or f"https://{DOMAIN}/items/{item['id']}"
 
 
-def build_caption(item, search_name):
+def build_caption(item, search_name, deal=None):
     title = html.escape(item.get("title") or "Sans titre")
     amount, cur = parse_price(item)
     symbol = "€" if cur == "EUR" else cur
@@ -207,6 +212,12 @@ def build_caption(item, search_name):
     details = [html.escape(str(d)) for d in details if d]
 
     lines = [f"🆕 <b>{title}</b>", f"💶 <b>{price}</b>"]
+    if deal and deal[0] > 0:  # deal = (remise %, prix médian, nb d'annonces comparées)
+        discount, market, n = deal
+        flame = "🔥🔥" if discount >= 50 else "🔥" if discount >= 30 else "👍"
+        lines.append(f"{flame} <b>-{discount} %</b> sous le marché (~{market:.0f} {symbol}, {n} annonces)")
+        if discount >= 75:
+            lines.append("⚠️ Prix très bas : vérifie l'annonce (arnaque, défaut, accessoire ?)")
     if details:
         lines.append(" · ".join(details))
     lines.append(f"🔎 {html.escape(search_name)}")
@@ -216,8 +227,15 @@ def build_caption(item, search_name):
 
 # ───────────────────────────── TELEGRAM ─────────────────────────────
 
-def telegram(method, **payload):
-    payload["chat_id"] = TELEGRAM_CHAT_ID
+def parse_chat_ids(value):
+    """Accepte "123", "123,456" ou une liste ; retourne la liste des IDs."""
+    if isinstance(value, (list, tuple)):
+        value = ",".join(str(v) for v in value)
+    return [c.strip() for c in str(value).split(",") if c.strip()]
+
+
+def telegram(method, chat_id, **payload):
+    payload["chat_id"] = chat_id
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}",
@@ -228,18 +246,19 @@ def telegram(method, **payload):
         log.warning("Telegram injoignable (%s)", type(e).__name__)
         return False
     if not r.ok:
-        log.warning("Telegram a refusé l'envoi (HTTP %s) : %s", r.status_code, r.text[:150])
+        log.warning("Telegram a refusé l'envoi à %s (HTTP %s) : %s", chat_id, r.status_code, r.text[:150])
     return r.ok
 
 
-def notify(item, search_name):
-    caption = build_caption(item, search_name)
+def notify(item, search_name, deal=None, chats=None):
+    caption = build_caption(item, search_name, deal)
     photo = (item.get("photo") or {}).get("url")
-    sent = False
-    if photo:
-        sent = telegram("sendPhoto", photo=photo, caption=caption, parse_mode="HTML")
-    if not sent:
-        telegram("sendMessage", text=caption, parse_mode="HTML")
+    for chat_id in chats or parse_chat_ids(TELEGRAM_CHAT_ID):
+        sent = False
+        if photo:
+            sent = telegram("sendPhoto", chat_id, photo=photo, caption=caption, parse_mode="HTML")
+        if not sent:
+            telegram("sendMessage", chat_id, text=caption, parse_mode="HTML")
 
 
 # ───────────────────────────── ÉTAT (anti-doublons) ─────────────────────────────
@@ -262,25 +281,63 @@ def save_state(seen, initialized):
 
 # ───────────────────────────── BOUCLE PRINCIPALE ─────────────────────────────
 
-def run_cycle(client, seen, initialized):
+def median(values):
+    v = sorted(values)
+    n = len(v)
+    return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
+
+
+def build_params(s, for_market=False):
+    """Paramètres de recherche. for_market=True : sans plafond de prix (calcul du prix du marché)."""
+    params = {
+        "search_text": s["search_text"],
+        "order": "newest_first",
+        "per_page": 20,
+        "page": 1,
+    }
+    for key in (("price_from",) if for_market else ("price_from", "price_to")):
+        if key in s:
+            params[key] = s[key]
+    params.update(s.get("extra", {}))
+    return {k: v for k, v in params.items() if v not in (None, "")}  # filtres vides = erreur 400
+
+
+def get_market_price(client, s, cache):
+    """(prix médian, nb d'annonces) des annonces récentes de cette recherche. Mis en cache."""
+    cached = cache.get(s["name"])
+    if cached and time.time() - cached[2] < BASELINE_REFRESH:
+        return cached[:2]
+    prices = []
+    for page in range(1, BASELINE_PAGES + 1):
+        if page > 1:
+            time.sleep(random.uniform(*SEARCH_DELAY))
+        params = build_params(s, for_market=True)
+        params["page"] = page
+        for item in client.search(params):
+            amount, _ = parse_price(item)
+            if amount and not is_excluded(item.get("title"), s.get("exclude", [])):
+                prices.append(amount)
+    if len(prices) >= MIN_SAMPLE:
+        result = (median(prices), len(prices))
+        log.info("%s : prix du marché ~%.0f (médiane de %d annonces)", s["name"], result[0], result[1])
+    else:
+        result = (None, len(prices))
+        log.info("%s : seulement %d annonces, pas de comparaison de prix", s["name"], len(prices))
+    cache[s["name"]] = (*result, time.time())
+    return result
+
+
+def run_cycle(client, seen, initialized, market_cache=None):
+    if market_cache is None:
+        market_cache = {}
     for i, s in enumerate(SEARCHES):
         if i:
             time.sleep(random.uniform(*SEARCH_DELAY))
 
-        params = {
-            "search_text": s["search_text"],
-            "order": "newest_first",
-            "per_page": 20,
-            "page": 1,
-        }
-        for key in ("price_from", "price_to"):
-            if key in s:
-                params[key] = s[key]
-        params.update(s.get("extra", {}))
-        params = {k: v for k, v in params.items() if v not in (None, "")}  # filtres vides = erreur 400
-
-        items = client.search(params)
+        items = client.search(build_params(s))
         first_time = s["name"] not in initialized  # 1er passage : on mémorise sans alerter
+        min_disc = s.get("min_discount", MIN_DISCOUNT)
+        chats = parse_chat_ids(s["chat_id"]) if s.get("chat_id") else None
         new = 0
 
         for item in items:
@@ -289,16 +346,26 @@ def run_cycle(client, seen, initialized):
             item_id = int(item["id"])
             if item_id in seen:
                 continue
-            seen.add(item_id)
             if first_time or is_excluded(item.get("title"), s.get("exclude", [])):
+                seen.add(item_id)
                 continue
-            notify(item, s["name"])
+
+            deal = None
+            amount, _ = parse_price(item)
+            if amount:
+                market, n = get_market_price(client, s, market_cache)  # peut lever Blocked
+                if market:
+                    deal = (round((1 - amount / market) * 100), market, n)
+            seen.add(item_id)  # après l'évaluation : si Vinted bloque, l'annonce sera revue
+            if deal and min_disc > 0 and deal[0] < min_disc:
+                continue  # pas assez en dessous du prix du marché
+            notify(item, s["name"], deal, chats)
             new += 1
             time.sleep(1.1)  # on reste sous la limite d'envoi de Telegram
 
         initialized.add(s["name"])
         log.info(
-            "%s : %d résultats, %d nouveau(x)%s",
+            "%s : %d résultats, %d alerte(s)%s",
             s["name"], len(items), new, " (initialisation)" if first_time else "",
         )
 
@@ -309,17 +376,18 @@ def main():
 
     seen, initialized = load_state()
     client = None
+    market_cache = {}
     pause = FIRST_BLOCK_PAUSE
 
     log.info("Bot démarré : %d recherche(s)", len(SEARCHES))
-    telegram("sendMessage", text="✅ Bot Vinted démarré")
+    telegram("sendMessage", parse_chat_ids(TELEGRAM_CHAT_ID)[0], text="✅ Bot Vinted démarré")
 
     try:
         while True:
             try:
                 if client is None:
                     client = VintedClient()
-                run_cycle(client, seen, initialized)
+                run_cycle(client, seen, initialized, market_cache)
                 save_state(seen, initialized)
                 pause = FIRST_BLOCK_PAUSE
             except Blocked as e:
