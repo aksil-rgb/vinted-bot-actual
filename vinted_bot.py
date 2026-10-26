@@ -40,28 +40,32 @@ except ImportError:
 
 # ───────────────────────────── CONFIGURATION ─────────────────────────────
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8694226548:AAE3aeMPbl27AC-v5tcA903iDC0YPfn4OME")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7446117467")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "COLLE_TON_TOKEN_ICI")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "COLLE_TON_CHAT_ID_ICI")
 
 DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
 SEARCHES = [
     {
-        "name": "Nike Tech Fleece",
-        "search_text": "nike tech fleece",
-        "price_to": 15,
-        "min_discount": 6,  # alerte seulement si -30 % ou plus sous le prix du marché
+        "name": "Nike",
+        "search_text": "nike",
+        "price_from": 1,
+        "price_to": 50,
+        "market_deals": False,  # pas de comparaison au prix du marché (recherche trop large)
+        # Bon plan : un article dont le titre contient un de ces mots, à BARGAIN_MAX € ou moins
+        "bargain_keywords": ["phenom", "aeroswift", "tech fleece", "run division", "windrunner"],
+        "exclude": ["enfant", "enfants", "kids", "junior"],  # titres ignorés
         # "chat_id": "987654321",  # optionnel : envoyer cette recherche à d'autres personnes
-        "exclude": ["enfant", "lot", "défaut"],  # mots interdits dans le titre
+        # "extra": {"attribute_ids[brand]": "53"},  # filtre Vinted optionnel (53 = Nike)
     },
     {
-        "name": "Switch OLED",
-        "search_text": "nintendo switch oled",
-        "price_from": 80,
-        "price_to": 150,
-        "min_discount": 20,
-        "exclude": ["pour pièces", "défectueux", "boîte vide"],
-        # "extra": {"attribute_ids[brand]": "53"},  # filtre Vinted optionnel (53 = Nike)
+        "name": "Under Armour",
+        "search_text": "under armour",
+        "price_from": 1,
+        "price_to": 50,
+        "market_deals": False,
+        "bargain_keywords": ["project rock", "coldgear", "unstoppable", "rival fleece", "curry"],
+        "exclude": ["enfant", "enfants", "kids", "junior"],
     },
 ]
 
@@ -72,8 +76,13 @@ MAX_BLOCK_PAUSE = 3600    # ...jusqu'à 1 h maximum
 
 # Détection des bonnes affaires : le bot compare chaque nouvelle annonce au prix médian
 # des annonces récentes de la même recherche (sans plafond de prix, "price_from" conservé).
-MIN_DISCOUNT = 25         # % minimum sous le prix du marché pour être alerté (0 = tout alerter)
+MIN_DISCOUNT = 25         # % minimum sous le prix du marché pour être une "bonne offre"
                           # réglable par recherche avec la clé "min_discount"
+ALERT_ALL_NEW = True      # True : toutes les nouvelles annonces + les bonnes offres mises en avant
+                          # False : seulement les bonnes offres (réglable par recherche : "all_new")
+SILENT_NEW = True         # les annonces normales arrivent sans son, les alertes importantes sonnent
+BARGAIN_MAX = 10          # "bon plan" : prix maximum (€) pour les articles de "bargain_keywords"
+                          # réglable par recherche avec la clé "bargain_max"
 BASELINE_PAGES = 3        # pages de 20 annonces utilisées pour estimer le prix du marché
 BASELINE_REFRESH = 6 * 3600  # le prix du marché est recalculé toutes les 6 h
 MIN_SAMPLE = 10           # en dessous, trop peu d'annonces pour comparer
@@ -197,11 +206,24 @@ def item_url(item):
     return url or f"https://{DOMAIN}/items/{item['id']}"
 
 
-def build_caption(item, search_name, deal=None):
+def matches_any(title, words):
+    """Vrai si le titre contient un des mots (début de mot : "phenom" trouve "phenome")."""
+    t = (title or "").lower()
+    return any(re.search(rf"\b{re.escape(w.lower())}", t) for w in words)
+
+
+def fmt_price(amount, symbol):
+    text = f"{amount:.2f}"
+    if text.endswith(".00"):
+        text = text[:-3]
+    return f"{text.replace('.', ',')} {symbol}"
+
+
+def build_caption(item, search_name, deal=None, label="Nouveau"):
     title = html.escape(item.get("title") or "Sans titre")
     amount, cur = parse_price(item)
     symbol = "€" if cur == "EUR" else cur
-    price = f"{amount:.2f} {symbol}" if amount is not None else "prix : voir l'annonce"
+    price = fmt_price(amount, symbol) if amount is not None else "prix : voir l'annonce"
 
     box = item.get("item_box") if isinstance(item.get("item_box"), dict) else {}
     details = [
@@ -211,17 +233,18 @@ def build_caption(item, search_name, deal=None):
     ]
     details = [html.escape(str(d)) for d in details if d]
 
-    lines = [f"🆕 <b>{title}</b>", f"💶 <b>{price}</b>"]
-    if deal and deal[0] > 0:  # deal = (remise %, prix médian, nb d'annonces comparées)
-        discount, market, n = deal
-        flame = "🔥🔥" if discount >= 50 else "🔥" if discount >= 30 else "👍"
-        lines.append(f"{flame} <b>-{discount} %</b> sous le marché (~{market:.0f} {symbol}, {n} annonces)")
+    link_text = "Ouvrir l'annonce"
+    lines = [
+        f"<b>{html.escape(label)}</b> · {html.escape(search_name)}",
+        title,
+        " · ".join([f"<b>{price}</b>"] + details),
+    ]
+    if deal and deal[0] > 0 and label != "Nouveau":  # deal = (remise %, prix médian, nb d'annonces)
+        discount, market, _ = deal
+        lines.append(f"-{discount} % sous le marché (~{market:.0f} {symbol})")
         if discount >= 75:
-            lines.append("⚠️ Prix très bas : vérifie l'annonce (arnaque, défaut, accessoire ?)")
-    if details:
-        lines.append(" · ".join(details))
-    lines.append(f"🔎 {html.escape(search_name)}")
-    lines.append(f'<a href="{html.escape(item_url(item))}">Voir sur Vinted</a>')
+            lines.append("Attention : prix très bas, vérifie l'annonce (arnaque, défaut, accessoire ?)")
+    lines.append(f'<a href="{html.escape(item_url(item))}">{link_text}</a>')
     return "\n".join(lines)
 
 
@@ -250,15 +273,17 @@ def telegram(method, chat_id, **payload):
     return r.ok
 
 
-def notify(item, search_name, deal=None, chats=None):
-    caption = build_caption(item, search_name, deal)
+def notify(item, search_name, deal=None, chats=None, label="Nouveau", silent=False):
+    caption = build_caption(item, search_name, deal, label)
     photo = (item.get("photo") or {}).get("url")
     for chat_id in chats or parse_chat_ids(TELEGRAM_CHAT_ID):
         sent = False
         if photo:
-            sent = telegram("sendPhoto", chat_id, photo=photo, caption=caption, parse_mode="HTML")
+            sent = telegram("sendPhoto", chat_id, photo=photo, caption=caption,
+                            parse_mode="HTML", disable_notification=silent)
         if not sent:
-            telegram("sendMessage", chat_id, text=caption, parse_mode="HTML")
+            telegram("sendMessage", chat_id, text=caption,
+                     parse_mode="HTML", disable_notification=silent)
 
 
 # ───────────────────────────── ÉTAT (anti-doublons) ─────────────────────────────
@@ -337,8 +362,12 @@ def run_cycle(client, seen, initialized, market_cache=None):
         items = client.search(build_params(s))
         first_time = s["name"] not in initialized  # 1er passage : on mémorise sans alerter
         min_disc = s.get("min_discount", MIN_DISCOUNT)
+        market_deals = s.get("market_deals", True)
+        all_new = s.get("all_new", ALERT_ALL_NEW)
+        bargain_max = s.get("bargain_max", BARGAIN_MAX)
+        bargain_words = s.get("bargain_keywords", [])
         chats = parse_chat_ids(s["chat_id"]) if s.get("chat_id") else None
-        new = 0
+        new = important = 0
 
         for item in items:
             if item.get("id") is None:
@@ -350,23 +379,36 @@ def run_cycle(client, seen, initialized, market_cache=None):
                 seen.add(item_id)
                 continue
 
-            deal = None
             amount, _ = parse_price(item)
-            if amount:
+            is_bargain = bool(
+                bargain_words
+                and amount is not None
+                and amount <= bargain_max
+                and matches_any(item.get("title"), bargain_words)
+            )
+            deal = None
+            if market_deals and amount:
                 market, n = get_market_price(client, s, market_cache)  # peut lever Blocked
                 if market:
                     deal = (round((1 - amount / market) * 100), market, n)
             seen.add(item_id)  # après l'évaluation : si Vinted bloque, l'annonce sera revue
-            if deal and min_disc > 0 and deal[0] < min_disc:
-                continue  # pas assez en dessous du prix du marché
-            notify(item, s["name"], deal, chats)
+
+            is_deal = bool(deal) and deal[0] > 0 and deal[0] >= min_disc
+            judged = deal is not None or not market_deals  # a-t-on pu juger cette annonce ?
+            if not (is_bargain or is_deal) and not all_new and judged:
+                continue  # ni bon plan, ni bonne offre, et les nouveautés ne sont pas demandées
+
+            label = "BON PLAN" if is_bargain else "BONNE OFFRE" if is_deal else "Nouveau"
+            notify(item, s["name"], deal, chats, label=label,
+                   silent=SILENT_NEW and label == "Nouveau")
             new += 1
+            important += label != "Nouveau"
             time.sleep(1.1)  # on reste sous la limite d'envoi de Telegram
 
         initialized.add(s["name"])
         log.info(
-            "%s : %d résultats, %d alerte(s)%s",
-            s["name"], len(items), new, " (initialisation)" if first_time else "",
+            "%s : %d résultats, %d alerte(s) dont %d importante(s)%s",
+            s["name"], len(items), new, important, " (initialisation)" if first_time else "",
         )
 
 
