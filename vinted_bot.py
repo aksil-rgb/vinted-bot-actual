@@ -48,24 +48,24 @@ DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 SEARCHES = [
     {
         "name": "Nike",
-        "search_text": "nike",
+        "search_text": "nike running, nike tech",
         "price_from": 1,
         "price_to": 50,
         "market_deals": False,  # pas de comparaison au prix du marché (recherche trop large)
         # Bon plan : un article dont le titre contient un de ces mots, à BARGAIN_MAX € ou moins
         "bargain_keywords": ["phenom", "aeroswift", "tech fleece", "run division", "windrunner"],
-        "exclude": ["enfant", "enfants", "kids", "junior"],  # titres ignorés
+        "exclude": ["enfant", "enfants", "kids", "junior", "chaussures"],  # titres ignorés
         # "chat_id": "987654321",  # optionnel : envoyer cette recherche à d'autres personnes
         # "extra": {"attribute_ids[brand]": "53"},  # filtre Vinted optionnel (53 = Nike)
     },
     {
         "name": "Under Armour",
-        "search_text": "under armour",
+        "search_text": "under armour, coldgear",
         "price_from": 1,
         "price_to": 50,
         "market_deals": False,
         "bargain_keywords": ["project rock", "coldgear", "unstoppable", "rival fleece", "curry"],
-        "exclude": ["enfant", "enfants", "kids", "junior"],
+        "exclude": ["enfant", "enfants", "kids", "junior", "chaussures"],
     },
 ]
 
