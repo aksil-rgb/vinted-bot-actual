@@ -41,7 +41,7 @@ except ImportError:
 # ───────────────────────────── CONFIGURATION ─────────────────────────────
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8694226548:AAE3aeMPbl27AC-v5tcA903iDC0YPfn4OME")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7446117467, ")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7446117467")
 
 DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
@@ -642,33 +642,93 @@ def debug_vinted():
             print(f"  {key} = {user[key]}")
 
 
-def show_chat_ids():
-    """python vinted_bot.py --ids : affiche l'identifiant des canaux et discussions connus du bot."""
+def tg_api(method, **params):
+    """Appel simple de l'API Telegram pour les commandes de diagnostic : (réponse, erreur)."""
+    try:
+        r = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}", params=params, timeout=20)
+        return r.json(), None
+    except requests.RequestException as e:
+        return None, f"Telegram injoignable ({type(e).__name__})"
+    except ValueError:
+        return None, "Réponse inattendue de Telegram"
+
+
+def show_chat_ids(handle=None):
+    """python vinted_bot.py --ids [@canal] : trouve l'identifiant d'un canal et vérifie que le bot peut y publier."""
     if "COLLE_TON" in TELEGRAM_TOKEN:
         print("Mets d'abord ton token Telegram à la ligne 43 de vinted_bot.py.")
         return
-    try:
-        r = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates", timeout=20)
-    except requests.RequestException as e:
-        print("Telegram injoignable :", type(e).__name__)
+    me, err = tg_api("getMe")
+    if err or not me.get("ok"):
+        print(err or f"Telegram refuse ce token ({me.get('description')}) : vérifie la ligne 43 de vinted_bot.py.")
         return
-    if r.status_code in (401, 404):
-        print(f"Telegram refuse ce token (HTTP {r.status_code}) : vérifie la ligne 43 de vinted_bot.py.")
+    bot = me["result"]
+    print(f"Bot : @{bot.get('username')}\n")
+
+    if handle:  # canal public indiqué par son @nom : pas besoin d'attendre un message
+        info, err = tg_api("getChat", chat_id=handle)
+        if err or not info.get("ok"):
+            print(err or f"Canal introuvable ({info.get('description')}). Le canal est-il public, et le @nom exact ?")
+            return
+        chat = info["result"]
+        print(f"Canal « {chat.get('title')} »  ->  {chat['id']}")
+        member, err = tg_api("getChatMember", chat_id=chat["id"], user_id=bot["id"])
+        if err or not member.get("ok"):
+            print("Le bot n'est PAS dans ce canal : ajoute-le comme administrateur.")
+        else:
+            status = member["result"].get("status")
+            if status == "administrator" and member["result"].get("can_post_messages", True):
+                print("Le bot est administrateur et peut publier : c'est bon.")
+            elif status == "administrator":
+                print("Le bot est administrateur mais sans le droit « Publier des messages » : active-le.")
+            else:
+                print(f"Le bot est « {status} » : il doit être ADMINISTRATEUR du canal.")
+        print("\nMets ce nombre à la ligne 44, après ton ID perso et une virgule.")
+        return
+
+    data, err = tg_api("getUpdates")
+    if err:
+        print(err)
+        return
+    if not data.get("ok"):
+        print(f"Telegram répond : {data.get('description')}")
+        if data.get("error_code") == 409:
+            print("Un autre programme (ou un webhook) utilise déjà ce bot et reçoit ses messages à sa place.")
         return
     chats = {}
-    for update in r.json().get("result", []):
+    for update in data.get("result", []):
         for key in ("my_chat_member", "channel_post", "edited_channel_post", "message"):
             chat = (update.get(key) or {}).get("chat")
             if chat:
                 name = chat.get("title") or chat.get("username") or chat.get("first_name") or "?"
                 chats[chat["id"]] = (chat.get("type", "?"), name)
     if not chats:
-        print("Aucun canal ni discussion trouvé. Vérifie que le bot est administrateur du canal, "
-              "écris un nouveau message dans le canal, puis relance cette commande.")
+        print("Aucun canal ni discussion trouvé (Telegram ne garde ces informations que 24 h).\n"
+              "Plus simple : rends le canal public quelques minutes, puis lance\n"
+              "  python vinted_bot.py --ids @nom_du_canal")
         return
     print("Identifiants à copier à la ligne 44 (le nombre, avec le signe - s'il y en a un) :\n")
     for chat_id, (kind, name) in chats.items():
         print(f"  {kind:<10} {name}  ->  {chat_id}")
+
+
+def test_telegram():
+    """python vinted_bot.py --test : envoie un message de test à chaque ID de la ligne 44."""
+    if "COLLE_TON" in TELEGRAM_TOKEN + TELEGRAM_CHAT_ID:
+        print("Renseigne d'abord le token (ligne 43) et le chat ID (ligne 44).")
+        return
+    for chat_id in parse_chat_ids(TELEGRAM_CHAT_ID):
+        try:
+            r = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                json={"chat_id": chat_id, "text": "Test du bot Vinted : ça marche."},
+                timeout=20,
+            )
+            ok = r.ok
+            detail = "" if ok else (r.json().get("description") or r.text[:100])
+        except (requests.RequestException, ValueError) as e:
+            ok, detail = False, type(e).__name__
+        print(f"  {chat_id} : " + ("OK, message envoyé" if ok else f"ÉCHEC ({detail})"))
 
 
 def main():
@@ -677,7 +737,11 @@ def main():
         debug_vinted()
         return
     if "--ids" in sys.argv:
-        show_chat_ids()
+        rest = [a for a in sys.argv[sys.argv.index("--ids") + 1:] if not a.startswith("--")]
+        show_chat_ids(rest[0] if rest else None)
+        return
+    if "--test" in sys.argv:
+        test_telegram()
         return
     if "COLLE_TON" in TELEGRAM_TOKEN + TELEGRAM_CHAT_ID:
         raise SystemExit("Renseigne TELEGRAM_TOKEN et TELEGRAM_CHAT_ID en haut du fichier.")
