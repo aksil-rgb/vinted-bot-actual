@@ -40,8 +40,8 @@ except ImportError:
 
 # ───────────────────────────── CONFIGURATION ─────────────────────────────
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8694226548:AAE3aeMPbl27AC-v5tcA903iDC0YPfn4OME")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7446117467")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "COLLE_TON_TOKEN_ICI")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "COLLE_TON_CHAT_ID_ICI")
 
 DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
@@ -69,11 +69,11 @@ SEARCHES = [
     },
 ]
 
-CYCLE_DELAY = (45, 90)    # pause entre deux tours complets (secondes)
-SEARCH_DELAY = (5, 12)    # pause entre deux recherches d'un même tour
-FIRST_BLOCK_PAUSE = 300   # pause initiale si Vinted bloque (5 min), doublée à chaque fois
-MAX_BLOCK_PAUSE = 3600    # ...jusqu'à 1 h maximum
-PER_PAGE = 20             # annonces lues par recherche et par tour (20 avant)
+CYCLE_DELAY = (15, 30)    # pause entre deux tours complets (secondes) ; si Vinted bloque souvent, augmente-la
+SEARCH_DELAY = (1, 3)     # pause entre deux recherches d'un même tour
+FIRST_BLOCK_PAUSE = 60    # pause initiale si Vinted bloque (1 min), doublée à chaque fois
+MAX_BLOCK_PAUSE = 600     # ...jusqu'à 10 min maximum
+PER_PAGE = 20             # annonces lues par recherche et par tour (plus c'est bas, plus c'est rapide)
 
 # Détection des bonnes affaires : le bot compare chaque nouvelle annonce au prix médian
 # des annonces récentes de la même recherche (sans plafond de prix, "price_from" conservé).
@@ -176,7 +176,13 @@ class VintedClient:
             params = {**params, "per_page": self.max_per_page}
         url = f"https://{API_HOST}/svc-catalogue/items"
         for attempt in (1, 2):
-            r = self.session.get(url, params=params, headers=self._headers(), timeout=20)
+            try:
+                r = self.session.get(url, params=params, headers=self._headers(), timeout=15)
+            except Exception as e:  # délai dépassé, coupure réseau : on réessaie tout de suite
+                if attempt == 2:
+                    raise
+                log.info("Vinted n’a pas répondu à temps (%s) : nouvel essai", type(e).__name__)
+                continue
             if r.status_code in (401, 403) and attempt == 1:
                 self.refresh()  # token expiré ou refusé : on en demande un neuf
                 continue
@@ -205,11 +211,11 @@ class VintedClient:
         if time.time() < self.seller_disabled_until or self.lookups_this_cycle >= SELLER_LOOKUPS_PER_CYCLE:
             return None
         self.lookups_this_cycle += 1
-        time.sleep(random.uniform(0.8, 2.0))
+        time.sleep(random.uniform(0.2, 0.6))
         stats, answered = None, False
         try:
             r = self.session.get(
-                f"https://{DOMAIN}/api/v2/users/{user_id}", headers=self._headers(), timeout=15
+                f"https://{DOMAIN}/api/v2/users/{user_id}", headers=self._headers(), timeout=6
             )
             if r.status_code == 200:
                 answered = True
@@ -426,15 +432,25 @@ def parse_chat_ids(value):
 
 def telegram(method, chat_id, **payload):
     payload["chat_id"] = chat_id
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}",
-            json=payload,
-            timeout=20,
-        )
-    except requests.RequestException as e:
-        log.warning("Telegram injoignable (%s)", type(e).__name__)
-        return False
+    for attempt in (1, 2, 3):
+        try:
+            r = requests.post(
+                f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/{method}",
+                json=payload,
+                timeout=20,
+            )
+        except requests.RequestException as e:
+            log.warning("Telegram injoignable (%s)", type(e).__name__)
+            return False
+        if r.status_code == 429 and attempt < 3:  # trop de messages d'un coup : Telegram dit combien attendre
+            try:
+                wait = int(r.json().get("parameters", {}).get("retry_after", 5))
+            except (ValueError, TypeError, AttributeError):
+                wait = 5
+            log.info("Telegram demande d’attendre %s s (limite de messages) : alerte renvoyée ensuite", wait)
+            time.sleep(min(wait, 60) + 0.5)
+            continue
+        break
     if not r.ok:
         log.warning("Telegram a refusé l'envoi à %s (HTTP %s) : %s", chat_id, r.status_code, r.text[:150])
     return r.ok
@@ -467,7 +483,7 @@ def load_state():
     try:
         data = json.loads(STATE_FILE.read_text(encoding="utf-8"))
         seen, initialized = set(data.get("seen", [])), set(data.get("initialized", []))
-        if data.get("per_page", 20) != PER_PAGE:  # nouvelle taille de page : on mémorise sans alerter
+        if data.get("per_page", 20) < PER_PAGE:  # pages plus grandes : on mémorise sans alerter
             initialized = set()
         return seen, initialized
     except (OSError, ValueError):
@@ -598,7 +614,71 @@ def run_cycle(client, seen, initialized, market_cache=None):
         )
 
 
+def debug_vinted():
+    """python vinted_bot.py --debug : montre ce que Vinted renvoie (jamais ton token) pour diagnostiquer."""
+    client = VintedClient()
+    s = SEARCHES[0]
+    items = client.search(build_params(s))
+    print(f"\n{len(items)} annonces reçues pour « {s['name']} »")
+    if not items:
+        return
+    item = items[0]
+    print("Champs d'une annonce :", ", ".join(sorted(item.keys())))
+    for key in ("title", "price", "total_item_price", "service_fee", "user", "item_box", "url"):
+        print(f"  {key} = {str(item.get(key))[:160]}")
+    uid = seller_of(item)[0]
+    print("\nIdentifiant vendeur :", uid)
+    if not uid:
+        return
+    r = client.session.get(f"https://{DOMAIN}/api/v2/users/{uid}", headers=client._headers(), timeout=15)
+    print("Profil vendeur : HTTP", r.status_code)
+    if r.status_code != 200:
+        print(r.text[:200])
+        return
+    user = r.json().get("user") or {}
+    print("Champs du profil :", ", ".join(sorted(user.keys())))
+    for key in sorted(user):
+        if "feedback" in key or "rating" in key or "reputation" in key:
+            print(f"  {key} = {user[key]}")
+
+
+def show_chat_ids():
+    """python vinted_bot.py --ids : affiche l'identifiant des canaux et discussions connus du bot."""
+    if "COLLE_TON" in TELEGRAM_TOKEN:
+        print("Mets d'abord ton token Telegram à la ligne 43 de vinted_bot.py.")
+        return
+    try:
+        r = requests.get(f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates", timeout=20)
+    except requests.RequestException as e:
+        print("Telegram injoignable :", type(e).__name__)
+        return
+    if r.status_code in (401, 404):
+        print(f"Telegram refuse ce token (HTTP {r.status_code}) : vérifie la ligne 43 de vinted_bot.py.")
+        return
+    chats = {}
+    for update in r.json().get("result", []):
+        for key in ("my_chat_member", "channel_post", "edited_channel_post", "message"):
+            chat = (update.get(key) or {}).get("chat")
+            if chat:
+                name = chat.get("title") or chat.get("username") or chat.get("first_name") or "?"
+                chats[chat["id"]] = (chat.get("type", "?"), name)
+    if not chats:
+        print("Aucun canal ni discussion trouvé. Vérifie que le bot est administrateur du canal, "
+              "écris un nouveau message dans le canal, puis relance cette commande.")
+        return
+    print("Identifiants à copier à la ligne 44 (le nombre, avec le signe - s'il y en a un) :\n")
+    for chat_id, (kind, name) in chats.items():
+        print(f"  {kind:<10} {name}  ->  {chat_id}")
+
+
 def main():
+    import sys
+    if "--debug" in sys.argv:
+        debug_vinted()
+        return
+    if "--ids" in sys.argv:
+        show_chat_ids()
+        return
     if "COLLE_TON" in TELEGRAM_TOKEN + TELEGRAM_CHAT_ID:
         raise SystemExit("Renseigne TELEGRAM_TOKEN et TELEGRAM_CHAT_ID en haut du fichier.")
 
