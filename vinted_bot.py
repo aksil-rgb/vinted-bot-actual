@@ -41,7 +41,7 @@ except ImportError:
 # ───────────────────────────── CONFIGURATION ─────────────────────────────
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8694226548:AAE3aeMPbl27AC-v5tcA903iDC0YPfn4OME")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7446117467, ")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7446117467, -1004446820442 ")
 
 DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
