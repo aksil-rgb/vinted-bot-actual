@@ -40,8 +40,8 @@ except ImportError:
 
 # ───────────────────────────── CONFIGURATION ─────────────────────────────
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8694226548:AAE3aeMPbl27AC-v5tcA903iDC0YPfn4OME")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7446117467")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "COLLE_TON_TOKEN_ICI")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "COLLE_TON_CHAT_ID_ICI")
 
 DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
@@ -84,7 +84,9 @@ ALERT_ALL_NEW = True      # True : toutes les nouvelles annonces + les bonnes of
 SILENT_NEW = True         # les annonces normales arrivent sans son, les alertes importantes sonnent
 BARGAIN_MAX = 10          # "bon plan" : prix maximum (€) pour les articles de "bargain_keywords"
                           # réglable par recherche avec la clé "bargain_max"
-ENRICH_SELLER = True      # affiche la note et le nombre d'avis du vendeur (alertes importantes seulement)
+ENRICH_SELLER = True      # affiche la note (étoiles) et le nombre d'avis du vendeur
+SELLER_STATS_ALL = True   # True : sur toutes les alertes ; False : seulement BON PLAN / BONNE OFFRE
+SELLER_LOOKUPS_PER_CYCLE = 10  # nombre maximum de vendeurs interrogés par tour (limite les requêtes)
 BUYER_PROTECTION = (0.70, 0.05)  # protection acheteur estimée : 0,70 € + 5 % (si Vinted ne donne pas le montant)
 SHIPPING_ESTIMATE = 3.89  # livraison la moins chère estimée (point relais, petit colis) ; None = pas de livraison
 BASELINE_PAGES = 3        # pages de 20 annonces utilisées pour estimer le prix du marché
@@ -120,7 +122,8 @@ class VintedClient:
         self.token_time = 0.0
         self.seller_cache = {}
         self.seller_failures = 0
-        self.seller_disabled = False
+        self.seller_disabled_until = 0.0
+        self.lookups_this_cycle = 0
         self.max_per_page = None
         self.refresh()
 
@@ -195,21 +198,33 @@ class VintedClient:
 
     def seller_stats(self, user_id):
         """(note sur 5, nombre d'avis) du vendeur, ou None. En cache, ne bloque jamais le bot."""
-        if not ENRICH_SELLER or not user_id or self.seller_disabled:
+        if not ENRICH_SELLER or not user_id:
             return None
         if user_id in self.seller_cache:
             return self.seller_cache[user_id]
-        stats = None
+        if time.time() < self.seller_disabled_until or self.lookups_this_cycle >= SELLER_LOOKUPS_PER_CYCLE:
+            return None
+        self.lookups_this_cycle += 1
+        time.sleep(random.uniform(0.8, 2.0))
+        stats, answered = None, False
         try:
             r = self.session.get(
                 f"https://{DOMAIN}/api/v2/users/{user_id}", headers=self._headers(), timeout=15
             )
             if r.status_code == 200:
+                answered = True
+                self.seller_failures = 0
                 user = r.json().get("user") or {}
-                reputation, count = user.get("feedback_reputation"), user.get("feedback_count")
-                if reputation is not None and count is not None:
-                    reputation = float(reputation)
-                    stats = (reputation * 5 if reputation <= 1 else reputation, int(count))
+                count = user.get("feedback_count")
+                note = user.get("feedback_rating")  # déjà sur 5
+                if note is None and user.get("feedback_reputation") is not None:
+                    reputation = float(user["feedback_reputation"])
+                    note = reputation * 5 if reputation <= 1 else reputation
+                if note is not None and count is not None:
+                    stats = (float(note), int(count))
+                else:
+                    warn_once("no-feedback", "Réponse du vendeur sans note (champs reçus : %s)",
+                              ", ".join(sorted(user.keys())) or "aucun")
             else:
                 self.seller_failures += 1
                 log.info("Avis du vendeur indisponibles (HTTP %s)", r.status_code)
@@ -217,9 +232,11 @@ class VintedClient:
             self.seller_failures += 1
             log.info("Avis du vendeur indisponibles (%s)", type(e).__name__)
         if self.seller_failures >= 3:
-            self.seller_disabled = True
-            log.warning("Avis des vendeurs désactivés après 3 échecs : le bot continue sans")
-        self.seller_cache[user_id] = stats
+            self.seller_failures = 0
+            self.seller_disabled_until = time.time() + 1800
+            log.warning("Avis des vendeurs en pause 30 min après 3 échecs : le bot continue sans")
+        if answered:  # une vraie réponse est mise en cache ; un échec sera retenté plus tard
+            self.seller_cache[user_id] = stats
         return stats
 
 
@@ -252,10 +269,20 @@ def item_url(item):
     return url or f"https://{DOMAIN}/items/{item['id']}"
 
 
+_warned = set()
+
+
+def warn_once(key, message, *args):
+    """Écrit un avertissement une seule fois par lancement du bot."""
+    if key not in _warned:
+        _warned.add(key)
+        log.warning(message, *args)
+
+
 def seller_of(item):
     """(id, pseudo, lien du profil) du vendeur, quand l'annonce les contient."""
     user = item.get("user") if isinstance(item.get("user"), dict) else {}
-    uid, login = user.get("id"), user.get("login")
+    uid, login = user.get("id") or item.get("user_id"), user.get("login")
     url = user.get("profile_url") or (f"https://{DOMAIN}/member/{uid}" if uid else None)
     if url and url.startswith("/"):
         url = f"https://{DOMAIN}{url}"
@@ -506,6 +533,7 @@ def get_market_price(client, s, cache):
 def run_cycle(client, seen, initialized, market_cache=None):
     if market_cache is None:
         market_cache = {}
+    client.lookups_this_cycle = 0
     for i, s in enumerate(SEARCHES):
         if i:
             time.sleep(random.uniform(*SEARCH_DELAY))
@@ -551,8 +579,12 @@ def run_cycle(client, seen, initialized, market_cache=None):
 
             label = "BON PLAN" if is_bargain else "BONNE OFFRE" if is_deal else "Nouveau"
             stats = None
-            if label != "Nouveau":  # la note du vendeur coûte une requête : alertes importantes seulement
-                stats = client.seller_stats(seller_of(item)[0])
+            if SELLER_STATS_ALL or label != "Nouveau":
+                uid = seller_of(item)[0]
+                if uid is None:
+                    warn_once("no-seller", "Les annonces ne contiennent pas le vendeur (champs reçus : %s) : "
+                              "pas d’avis possibles", ", ".join(sorted(item.keys())))
+                stats = client.seller_stats(uid)
             notify(item, s["name"], deal, chats, label=label,
                    silent=SILENT_NEW and label == "Nouveau", seller=stats)
             new += 1
