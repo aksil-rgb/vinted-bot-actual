@@ -85,8 +85,8 @@ SILENT_NEW = True         # les annonces normales arrivent sans son, les alertes
 BARGAIN_MAX = 10          # "bon plan" : prix maximum (€) pour les articles de "bargain_keywords"
                           # réglable par recherche avec la clé "bargain_max"
 ENRICH_SELLER = True      # affiche la note et le nombre d'avis du vendeur (alertes importantes seulement)
-SHIPPING_ESTIMATE = None  # ex. 3.89 : prix de la livraison la moins chère que tu paies d'habitude ;
-                          # s'il est renseigné, le message affiche un total "livraison comprise (estimation)"
+BUYER_PROTECTION = (0.70, 0.05)  # protection acheteur estimée : 0,70 € + 5 % (si Vinted ne donne pas le montant)
+SHIPPING_ESTIMATE = 3.89  # livraison la moins chère estimée (point relais, petit colis) ; None = pas de livraison
 BASELINE_PAGES = 3        # pages de 20 annonces utilisées pour estimer le prix du marché
 BASELINE_REFRESH = 6 * 3600  # le prix du marché est recalculé toutes les 6 h
 MIN_SAMPLE = 10           # en dessous, trop peu d'annonces pour comparer
@@ -291,10 +291,36 @@ def published_text(item):
     return f"Publié il y a {age // 86400} j"
 
 
+def parse_amount(value):
+    if isinstance(value, dict):
+        value = value.get("amount")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def cost_breakdown(item, amount):
+    """(protection acheteur, livraison, total tout compris, protection estimée ?) ou None sans prix."""
+    if amount is None:
+        return None
+    fee = parse_amount(item.get("service_fee"))
+    total = parse_total(item)
+    if fee is None and total is not None and total > amount:
+        fee = total - amount  # Vinted donne le prix avec protection : on en déduit la protection
+    estimated = fee is None
+    if estimated:
+        fee = BUYER_PROTECTION[0] + BUYER_PROTECTION[1] * amount
+    shipping = SHIPPING_ESTIMATE or 0.0
+    return fee, shipping, amount + fee + shipping, estimated
+
+
 def fmt_rating(note, count):
+    """Avis du vendeur en étoiles : ★★★★☆ 4,4 (437 avis)."""
     if not count:
         return "aucun avis"
-    return f"{note:.1f}".replace(".", ",") + f"/5 ({count} avis)"
+    full = max(0, min(5, int(note + 0.5)))
+    return "★" * full + "☆" * (5 - full) + f" {note:.1f}".replace(".", ",") + f" ({count} avis)"
 
 
 def matches_any(title, words):
@@ -310,7 +336,11 @@ def fmt_price(amount, symbol):
     return f"{text.replace('.', ',')} {symbol}"
 
 
+BANNER_BAR = "━" * 18
+
+
 def build_caption(item, search_name, deal=None, label="Nouveau", seller=None, with_link=True):
+    important = label != "Nouveau"
     title = html.escape(item.get("title") or "Sans titre")
     amount, cur = parse_price(item)
     symbol = "€" if cur == "EUR" else cur
@@ -324,25 +354,25 @@ def build_caption(item, search_name, deal=None, label="Nouveau", seller=None, wi
     ]
     details = [html.escape(str(d)) for d in details if d]
 
-    lines = [
-        f"<b>{html.escape(label)}</b> · {html.escape(search_name)}",
-        title,
-        " · ".join([f"<b>{price}</b>"] + details),
-    ]
+    name = html.escape(search_name)
+    if important:  # bandeau très visible
+        lines = [BANNER_BAR, f"🔥 <b>{html.escape(label)}</b> · {name}", BANNER_BAR]
+    else:
+        lines = [f"<b>{html.escape(label)}</b> · {name}"]
+    lines += [title, " · ".join([f"<b>{price}</b>"] + details)]
 
-    total = parse_total(item)
-    totals = []
-    if total and amount is not None and total > amount:
-        totals.append(f"{fmt_price(total, symbol)} avec protection acheteur")
-    base = total or amount
-    if SHIPPING_ESTIMATE and base:
-        totals.append(f"≈ {fmt_price(base + SHIPPING_ESTIMATE, symbol)} livraison comprise (estimation)")
-    if totals:
-        lines.append("Total : " + " · ".join(totals))
+    cost = cost_breakdown(item, amount)
+    if cost:
+        fee, shipping, total_all, _ = cost
+        parts = [price, f"{fmt_price(fee, symbol)} protection"]
+        if shipping:
+            parts.append(f"{fmt_price(shipping, symbol)} livraison mini")
+        lines.append(f"Total ≈ <b>{fmt_price(total_all, symbol)}</b> " + ("tout compris" if shipping else "hors livraison"))
+        lines.append("(" + " + ".join(parts) + ")")
 
-    if deal and deal[0] > 0 and label != "Nouveau":  # deal = (remise %, prix médian, nb d'annonces)
+    if deal and deal[0] > 0 and important:  # deal = (remise %, prix médian, nb d'annonces)
         discount, market, _ = deal
-        lines.append(f"-{discount} % sous le marché (~{market:.0f} {symbol})")
+        lines.append(f"<b>-{discount} % sous le marché</b> (~{market:.0f} {symbol})")
         if discount >= 75:
             lines.append("Attention : prix très bas, vérifie l’annonce (arnaque, défaut, accessoire ?)")
 
@@ -350,6 +380,8 @@ def build_caption(item, search_name, deal=None, label="Nouveau", seller=None, wi
     if login or seller:
         parts = ([html.escape(str(login))] if login else []) + ([fmt_rating(*seller)] if seller else [])
         lines.append("Vendeur : " + " · ".join(parts))
+    if important and seller and (seller[1] < 5 or seller[0] < 4.0):
+        lines.append("Prudence : vendeur avec peu d’avis ou noté moins de 4/5")
     lines.append(published_text(item))
     if with_link:
         lines.append(f'<a href="{html.escape(item_url(item))}">Ouvrir l’annonce</a>')
