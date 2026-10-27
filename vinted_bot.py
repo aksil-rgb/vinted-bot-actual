@@ -73,7 +73,7 @@ CYCLE_DELAY = (45, 90)    # pause entre deux tours complets (secondes)
 SEARCH_DELAY = (5, 12)    # pause entre deux recherches d'un même tour
 FIRST_BLOCK_PAUSE = 300   # pause initiale si Vinted bloque (5 min), doublée à chaque fois
 MAX_BLOCK_PAUSE = 3600    # ...jusqu'à 1 h maximum
-PER_PAGE = 50             # annonces lues par recherche et par tour (20 avant)
+PER_PAGE = 20             # annonces lues par recherche et par tour (20 avant)
 
 # Détection des bonnes affaires : le bot compare chaque nouvelle annonce au prix médian
 # des annonces récentes de la même recherche (sans plafond de prix, "price_from" conservé).
