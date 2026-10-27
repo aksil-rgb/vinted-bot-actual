@@ -40,8 +40,8 @@ except ImportError:
 
 # ───────────────────────────── CONFIGURATION ─────────────────────────────
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8694226548:AAE3aeMPbl27AC-v5tcA903iDC0YPfn4OME")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7446117467, -1004446820442")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "COLLE_TON_TOKEN_ICI")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "COLLE_TON_CHAT_ID_ICI")
 
 DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
@@ -427,7 +427,7 @@ def parse_chat_ids(value):
     """Accepte "123", "123,456" ou une liste ; retourne la liste des IDs."""
     if isinstance(value, (list, tuple)):
         value = ",".join(str(v) for v in value)
-    return [c.strip() for c in str(value).split(",") if c.strip()]
+    return [c for c in re.split(r"[,;\s]+", str(value)) if c]
 
 
 def telegram(method, chat_id, **payload):
@@ -642,6 +642,21 @@ def debug_vinted():
             print(f"  {key} = {user[key]}")
 
 
+def describe_recipients():
+    """Lignes qui disent à qui le bot enverra les alertes (pour repérer une mauvaise configuration)."""
+    ids = parse_chat_ids(TELEGRAM_CHAT_ID)
+    note = ""
+    if os.getenv("TELEGRAM_CHAT_ID"):
+        note = " [lus depuis la variable d’environnement TELEGRAM_CHAT_ID, PAS depuis la ligne 44 du fichier]"
+    lines = [f"Alertes envoyées à {len(ids)} destinataire(s) : {', '.join(ids)}{note}"]
+    if not any(i.startswith(("-", "@")) for i in ids):
+        lines.append("Attention : aucun canal ni groupe dans la liste (leur identifiant commence par - ou @)")
+    for s in SEARCHES:
+        if s.get("chat_id"):
+            lines.append(f"Recherche « {s['name']} » : envoyée uniquement à {', '.join(parse_chat_ids(s['chat_id']))}")
+    return lines
+
+
 def tg_api(method, **params):
     """Appel simple de l'API Telegram pour les commandes de diagnostic : (réponse, erreur)."""
     try:
@@ -717,6 +732,9 @@ def test_telegram():
     if "COLLE_TON" in TELEGRAM_TOKEN + TELEGRAM_CHAT_ID:
         print("Renseigne d'abord le token (ligne 43) et le chat ID (ligne 44).")
         return
+    for line in describe_recipients():
+        print(line)
+    print()
     for chat_id in parse_chat_ids(TELEGRAM_CHAT_ID):
         try:
             r = requests.post(
@@ -752,6 +770,8 @@ def main():
     pause = FIRST_BLOCK_PAUSE
 
     log.info("Bot démarré : %d recherche(s)", len(SEARCHES))
+    for line in describe_recipients():
+        log.info(line)
     telegram("sendMessage", parse_chat_ids(TELEGRAM_CHAT_ID)[0], text="✅ Bot Vinted démarré")
 
     try:
