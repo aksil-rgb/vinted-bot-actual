@@ -40,32 +40,69 @@ except ImportError:
 
 # ───────────────────────────── CONFIGURATION ─────────────────────────────
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8694226548:AAE3aeMPbl27AC-v5tcA903iDC0YPfn4OME")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7446117467, -1004446820442 ")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "COLLE_TON_TOKEN_ICI")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "COLLE_TON_CHAT_ID_ICI")
 
 DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
+# Mots qui écartent une annonce : chaussures, accessoires, débardeurs, enfants...
+# (sans accents ni majuscules ; "chaussure" trouve aussi "chaussures" ; un espace à la fin = mot entier :
+#  "basket " écarte "basket" mais pas "basketball")
+SKIP_WORDS = [
+    "chaussure", "baskets", "basket ", "sneaker", "crampon", "pegasus", "vomero", "vaporfly", "alphafly", "streakfly",
+    "air max", "air force", "react ", "flyknit", "zoom", "pointure",
+    "chaussette", "débardeur", "tank", "casquette", "bonnet", "gant", "écharpe", "sac", "gourde",
+    "lunette", "montre",
+    "enfant", "kids", "junior", "garçon", "fille", "bébé", "ans",
+]
+# Mots obligatoires : le titre doit en contenir au moins un. Listes de départ : complète-les.
+RUNNING_WORDS = ["run", "course", "phenom", "aeroswift", "aeroloft", "adv", "storm-fit", "windrunner",
+                 "repel", "tempo", "challenger", "flex stride", "element", "miler", "therma"]
+CLOTHING_WORDS = ["veste", "pantalon", "short", "legging", "collant", "t-shirt", "tee", "maillot", "haut",
+                  "sweat", "hoodie", "gilet", "coupe-vent", "coupe vent", "jogging", "survetement", "polo",
+                  "manches", "jacket", "pants", "tights", "top"]
+JACKET_WORDS = ["veste", "jacket", "blouson", "doudoune", "coupe-vent", "coupe vent", "windbreaker",
+                "parka", "manteau", "softshell", "gilet", "reactor", "infrared", "storm", "full zip"]
+
 SEARCHES = [
     {
-        "name": "Nike",
-        "search_text": "nike running, nike tech",
+        "name": "Nike Phenom",
+        "search_text": "nike phenom",
         "price_from": 1,
         "price_to": 50,
-        "market_deals": False,  # pas de comparaison au prix du marché (recherche trop large)
-        # Bon plan : un article dont le titre contient un de ces mots, à BARGAIN_MAX € ou moins
-        "bargain_keywords": ["phenom", "aeroswift", "tech fleece", "run division", "windrunner"],
-        "exclude": ["enfant", "enfants", "kids", "junior", "chaussures"],  # titres ignorés
+        "include": ["phenom"],     # le titre doit contenir un de ces mots
+        "exclude": SKIP_WORDS,     # ...et aucun de ceux-là
+        "bargain_keywords": ["phenom"],  # bon plan : article de ces mots à BARGAIN_MAX € ou moins
+        # "market_deals": False,   # optionnel : ne pas comparer au prix du marché
         # "chat_id": "987654321",  # optionnel : envoyer cette recherche à d'autres personnes
-        # "extra": {"attribute_ids[brand]": "53"},  # filtre Vinted optionnel (53 = Nike)
+        # "url": "https://www.vinted.fr/catalog?...",  # optionnel : adresse copiée depuis le site (catégorie, taille...)
     },
     {
-        "name": "Under Armour",
+        "name": "Nike running",
+        "search_text": "nike running",
+        "price_from": 1,
+        "price_to": 50,
+        "include": RUNNING_WORDS + CLOTHING_WORDS,   # un mot running OU un type de vêtement
+        "exclude": SKIP_WORDS,
+        "bargain_keywords": ["phenom", "aeroswift", "aeroloft", "run division", "storm-fit"],
+    },
+    {
+        "name": "UA ColdGear",
         "search_text": "under armour coldgear",
         "price_from": 1,
         "price_to": 50,
-        "market_deals": False,
-        "bargain_keywords": ["project rock", "coldgear", "unstoppable", "rival fleece", "curry"],
-        "exclude": ["enfant", "enfants", "kids", "junior", "chaussures"],
+        "include": JACKET_WORDS,
+        "exclude": SKIP_WORDS,
+        "bargain_keywords": ["coldgear", "cold gear"],
+    },
+    {
+        "name": "UA Cold Gear",  # même chose, orthographe avec espace
+        "search_text": "under armour cold gear",
+        "price_from": 1,
+        "price_to": 50,
+        "include": JACKET_WORDS,
+        "exclude": SKIP_WORDS,
+        "bargain_keywords": ["coldgear", "cold gear"],
     },
 ]
 
@@ -263,9 +300,15 @@ def parse_price(item):
     return None, "EUR"
 
 
+def normalize(text):
+    """Minuscules sans accents : « Débardeur » et « debardeur » deviennent identiques."""
+    import unicodedata
+    text = unicodedata.normalize("NFKD", str(text or "").lower())
+    return "".join(c for c in text if not unicodedata.combining(c))
+
+
 def is_excluded(title, words):
-    t = (title or "").lower()
-    return any(re.search(rf"\b{re.escape(w.lower())}\b", t) for w in words)
+    return matches_any(title, words)
 
 
 def item_url(item):
@@ -357,9 +400,9 @@ def fmt_rating(note, count):
 
 
 def matches_any(title, words):
-    """Vrai si le titre contient un des mots (début de mot : "phenom" trouve "phenome")."""
-    t = (title or "").lower()
-    return any(re.search(rf"\b{re.escape(w.lower())}", t) for w in words)
+    """Vrai si le titre contient un des mots (début de mot, sans tenir compte des accents ni des majuscules)."""
+    t = normalize(title)
+    return any(re.search(rf"\b{re.escape(normalize(w))}", t) for w in words)
 
 
 def fmt_price(amount, symbol):
@@ -506,17 +549,60 @@ def median(values):
     return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
 
 
+URL_FILTERS = {  # nom dans l'adresse du site -> nom attendu par l'API Vinted
+    "catalog": "attribute_ids[catalog]", "catalog_ids": "attribute_ids[catalog]",
+    "brand_ids": "attribute_ids[brand]", "size_ids": "attribute_ids[size]",
+    "status_ids": "attribute_ids[status]", "color_ids": "attribute_ids[color]",
+    "material_ids": "attribute_ids[material]",
+}
+
+
+def params_from_url(url):
+    """Convertit l'adresse d'une recherche Vinted (copiée depuis le site) en paramètres pour l'API."""
+    from urllib.parse import parse_qs, urlparse
+    query = {}
+    for key, values in parse_qs(urlparse(url).query).items():
+        query.setdefault(key[:-2] if key.endswith("[]") else key, []).extend(values)
+    params = {}
+    for key in ("search_text", "price_from", "price_to"):
+        if query.get(key):
+            params[key] = query[key][0]
+    for web_key, api_key in URL_FILTERS.items():
+        ids = [i for value in query.get(web_key, []) for i in value.split(",") if i]
+        if ids:
+            params[api_key] = ",".join(dict.fromkeys(ids))
+    return params
+
+
+def explain_filters(item, s):
+    """(retenue ?, raison) : pourquoi une annonce passe ou non les filtres de titre de la recherche."""
+    title = item.get("title")
+    if s.get("include") and not matches_any(title, s["include"]):
+        return False, "aucun mot obligatoire dans le titre"
+    t = normalize(title)
+    for word in s.get("exclude", []):
+        if re.search(rf"\b{re.escape(normalize(word))}", t):
+            return False, f"mot interdit « {word.strip()} »"
+    return True, "retenue"
+
+
+def passes_filters(item, s):
+    """Le titre contient-il un mot obligatoire ("include") et aucun mot interdit ("exclude") ?"""
+    return explain_filters(item, s)[0]
+
+
 def build_params(s, for_market=False):
     """Paramètres de recherche. for_market=True : sans plafond de prix (calcul du prix du marché)."""
-    params = {
-        "search_text": s["search_text"],
-        "order": "newest_first",
-        "per_page": PER_PAGE,
-        "page": 1,
-    }
-    for key in (("price_from",) if for_market else ("price_from", "price_to")):
+    params = {"order": "newest_first", "per_page": PER_PAGE, "page": 1}
+    if s.get("url"):
+        params.update(params_from_url(s["url"]))
+    if s.get("search_text"):
+        params["search_text"] = s["search_text"]
+    for key in ("price_from", "price_to"):
         if key in s:
             params[key] = s[key]
+    if for_market:
+        params.pop("price_to", None)
     params.update(s.get("extra", {}))
     return {k: v for k, v in params.items() if v not in (None, "")}  # filtres vides = erreur 400
 
@@ -534,7 +620,7 @@ def get_market_price(client, s, cache):
         params["page"] = page
         for item in client.search(params):
             amount, _ = parse_price(item)
-            if amount and not is_excluded(item.get("title"), s.get("exclude", [])):
+            if amount and passes_filters(item, s):
                 prices.append(amount)
     if len(prices) >= MIN_SAMPLE:
         result = (median(prices), len(prices))
@@ -554,7 +640,13 @@ def run_cycle(client, seen, initialized, market_cache=None):
         if i:
             time.sleep(random.uniform(*SEARCH_DELAY))
 
-        items = client.search(build_params(s))
+        try:
+            items = client.search(build_params(s))
+        except Blocked:
+            raise
+        except Exception as e:  # une recherche en erreur ne doit pas bloquer les autres
+            warn_once(f"search-{s['name']}-{type(e).__name__}", "Recherche « %s » en erreur : %s", s["name"], e)
+            continue
         first_time = s["name"] not in initialized  # 1er passage : on mémorise sans alerter
         min_disc = s.get("min_discount", MIN_DISCOUNT)
         market_deals = s.get("market_deals", True)
@@ -562,7 +654,7 @@ def run_cycle(client, seen, initialized, market_cache=None):
         bargain_max = s.get("bargain_max", BARGAIN_MAX)
         bargain_words = s.get("bargain_keywords", [])
         chats = parse_chat_ids(s["chat_id"]) if s.get("chat_id") else None
-        new = important = 0
+        new = important = filtered = 0
 
         for item in items:
             if item.get("id") is None:
@@ -570,8 +662,12 @@ def run_cycle(client, seen, initialized, market_cache=None):
             item_id = int(item["id"])
             if item_id in seen:
                 continue
-            if first_time or is_excluded(item.get("title"), s.get("exclude", [])):
+            if first_time:
                 seen.add(item_id)
+                continue
+            if not passes_filters(item, s):  # pas le bon type d'article
+                seen.add(item_id)
+                filtered += 1
                 continue
 
             amount, _ = parse_price(item)
@@ -609,8 +705,8 @@ def run_cycle(client, seen, initialized, market_cache=None):
 
         initialized.add(s["name"])
         log.info(
-            "%s : %d résultats, %d alerte(s) dont %d importante(s)%s",
-            s["name"], len(items), new, important, " (initialisation)" if first_time else "",
+            "%s : %d résultats, %d écartés par les filtres, %d alerte(s) dont %d importante(s)%s",
+            s["name"], len(items), filtered, new, important, " (initialisation)" if first_time else "",
         )
 
 
@@ -640,6 +736,42 @@ def debug_vinted():
     for key in sorted(user):
         if "feedback" in key or "rating" in key or "reputation" in key:
             print(f"  {key} = {user[key]}")
+
+
+def check_searches():
+    """python vinted_bot.py --check : montre ce que chaque recherche trouve et pourquoi chaque annonce
+    est retenue ou écartée. N'envoie aucune alerte."""
+    client = VintedClient()
+    for i, s in enumerate(SEARCHES):
+        if i:
+            time.sleep(random.uniform(*SEARCH_DELAY))
+        try:
+            items = client.search(build_params(s))
+        except Blocked:
+            raise
+        except Exception as e:
+            print(f"\n=== {s['name']} : erreur ({e}) ===")
+            continue
+        print(f"\n=== {s['name']} : {len(items)} annonces trouvées par Vinted ===")
+        kept = 0
+        for item in items:
+            ok, reason = explain_filters(item, s)
+            kept += ok
+            amount, _ = parse_price(item)
+            price = fmt_price(amount, "€") if amount is not None else "?"
+            print(f"{'OK ' if ok else 'NON'} {price:>6} {(item.get('title') or '')[:40]}" + ("" if ok else f"  [{reason}]"))
+        print(f"-> {kept} retenue(s) sur {len(items)}")
+
+
+def describe_searches():
+    """Une ligne par recherche : ce qui est demandé à Vinted, puis les filtres de titre."""
+    lines = []
+    for s in SEARCHES:
+        params = build_params(s)
+        shown = ", ".join(f"{k}={v}" for k, v in params.items() if k not in ("order", "per_page", "page"))
+        lines.append(f"Recherche « {s['name']} » : {shown} | mots obligatoires : {len(s.get('include') or [])}"
+                     f" | mots interdits : {len(s.get('exclude') or [])}")
+    return lines
 
 
 def describe_recipients():
@@ -761,6 +893,9 @@ def main():
     if "--test" in sys.argv:
         test_telegram()
         return
+    if "--check" in sys.argv:
+        check_searches()
+        return
     if "COLLE_TON" in TELEGRAM_TOKEN + TELEGRAM_CHAT_ID:
         raise SystemExit("Renseigne TELEGRAM_TOKEN et TELEGRAM_CHAT_ID en haut du fichier.")
 
@@ -770,7 +905,7 @@ def main():
     pause = FIRST_BLOCK_PAUSE
 
     log.info("Bot démarré : %d recherche(s)", len(SEARCHES))
-    for line in describe_recipients():
+    for line in describe_searches() + describe_recipients():
         log.info(line)
     telegram("sendMessage", parse_chat_ids(TELEGRAM_CHAT_ID)[0], text="✅ Bot Vinted démarré")
 
