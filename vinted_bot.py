@@ -60,7 +60,7 @@ SEARCHES = [
     },
     {
         "name": "Under Armour",
-        "search_text": "under armour, coldgear",
+        "search_text": "under armour coldgear",
         "price_from": 1,
         "price_to": 50,
         "market_deals": False,
