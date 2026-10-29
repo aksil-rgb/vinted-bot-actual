@@ -40,12 +40,19 @@ except ImportError:
 
 # ───────────────────────────── CONFIGURATION ─────────────────────────────
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8694226548:AAE3aeMPbl27AC-v5tcA903iDC0YPfn4OME")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7446117467, -1004446820442")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "COLLE_TON_TOKEN_ICI")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "COLLE_TON_CHAT_ID_ICI")
 
 DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
-# Mots qui écartent une annonce : chaussures, accessoires, débardeurs, enfants...
+# Mots qui annoncent une contrefaçon, une copie ou un article "inspiré de" : annonce écartée.
+FAKE_WORDS = [
+    "réplique", "replica", "copie", "copy", "fake", "contrefaçon", "imitation", "inspir", "dupe", "bootleg",
+    "unbranded", "sans marque", "no brand", "non officiel", "non original", "1:1", "aaa",
+    "style nike", "type nike", "genre nike", "façon nike", "style under armour", "type under armour",
+    "genre under armour", "façon under armour",
+]
+# Mots qui écartent une annonce : chaussures, accessoires, débardeurs, enfants... + contrefaçons
 # (sans accents ni majuscules ; "chaussure" trouve aussi "chaussures" ; un espace à la fin = mot entier :
 #  "basket " écarte "basket" mais pas "basketball")
 SKIP_WORDS = [
@@ -54,7 +61,7 @@ SKIP_WORDS = [
     "chaussette", "débardeur", "tank", "casquette", "bonnet", "gant", "écharpe", "sac", "gourde",
     "lunette", "montre",
     "enfant", "kids", "junior", "garçon", "fille", "bébé", "ans",
-]
+] + FAKE_WORDS
 # Mots obligatoires : le titre doit en contenir au moins un. Listes de départ : complète-les.
 RUNNING_WORDS = ["run", "course", "phenom", "aeroswift", "aeroloft", "adv", "storm-fit", "windrunner",
                  "repel", "tempo", "challenger", "flex stride", "element", "miler", "therma"]
@@ -68,6 +75,7 @@ SEARCHES = [
     {
         "name": "Nike Phenom",
         "search_text": "nike phenom",
+        "brand": "nike",  # marque attendue : une autre marque déclarée est signalée comme suspecte
         "price_from": 1,
         "price_to": 50,
         "include": ["phenom"],     # le titre doit contenir un de ces mots
@@ -80,6 +88,7 @@ SEARCHES = [
     {
         "name": "Nike running",
         "search_text": "nike running",
+        "brand": "nike",
         "price_from": 1,
         "price_to": 50,
         "include": RUNNING_WORDS + CLOTHING_WORDS,   # un mot running OU un type de vêtement
@@ -89,6 +98,7 @@ SEARCHES = [
     {
         "name": "UA ColdGear",
         "search_text": "under armour coldgear",
+        "brand": "under armour",
         "price_from": 1,
         "price_to": 50,
         "include": JACKET_WORDS,
@@ -98,6 +108,7 @@ SEARCHES = [
     {
         "name": "UA Cold Gear",  # même chose, orthographe avec espace
         "search_text": "under armour cold gear",
+        "brand": "under armour",
         "price_from": 1,
         "price_to": 50,
         "include": JACKET_WORDS,
@@ -116,6 +127,7 @@ PER_PAGE = 20             # annonces lues par recherche et par tour (plus c'est 
 # des annonces récentes de la même recherche (sans plafond de prix, "price_from" conservé).
 MIN_DISCOUNT = 25         # % minimum sous le prix du marché pour être une "bonne offre"
                           # réglable par recherche avec la clé "min_discount"
+FAKE_PRICE_DROP = 60      # prix au moins 60 % sous le marché : signalé comme risque de contrefaçon
 ALERT_ALL_NEW = True      # True : toutes les nouvelles annonces + les bonnes offres mises en avant
                           # False : seulement les bonnes offres (réglable par recherche : "all_new")
 SILENT_NEW = True         # les annonces normales arrivent sans son, les alertes importantes sonnent
@@ -415,7 +427,19 @@ def fmt_price(amount, symbol):
 BANNER_BAR = "━" * 18
 
 
-def build_caption(item, search_name, deal=None, label="Nouveau", seller=None, with_link=True):
+def fake_risk(item, s, deal=None):
+    """Signaux de contrefaçon possibles (phrases courtes). C'est une aide, pas une preuve."""
+    risks = []
+    if deal and deal[0] >= FAKE_PRICE_DROP:
+        risks.append(f"prix {deal[0]} % sous le marché")
+    box = item.get("item_box") if isinstance(item.get("item_box"), dict) else {}
+    brand = item.get("brand_title") or box.get("first_line")
+    if s.get("brand") and brand and normalize(s["brand"]) not in normalize(brand):
+        risks.append(f"marque déclarée « {brand} »")
+    return risks
+
+
+def build_caption(item, search_name, deal=None, label="Nouveau", seller=None, with_link=True, risks=None):
     important = label != "Nouveau"
     title = html.escape(item.get("title") or "Sans titre")
     amount, cur = parse_price(item)
@@ -449,8 +473,10 @@ def build_caption(item, search_name, deal=None, label="Nouveau", seller=None, wi
     if deal and deal[0] > 0 and important:  # deal = (remise %, prix médian, nb d'annonces)
         discount, market, _ = deal
         lines.append(f"<b>-{discount} % sous le marché</b> (~{market:.0f} {symbol})")
-        if discount >= 75:
-            lines.append("Attention : prix très bas, vérifie l’annonce (arnaque, défaut, accessoire ?)")
+
+    if risks:
+        lines.append("Risque contrefaçon : " + " · ".join(risks))
+        lines.append("Avant d’acheter : demande la photo de l’étiquette (code produit)")
 
     _, login, _ = seller_of(item)
     if login or seller:
@@ -499,9 +525,9 @@ def telegram(method, chat_id, **payload):
     return r.ok
 
 
-def notify(item, search_name, deal=None, chats=None, label="Nouveau", silent=False, seller=None):
-    caption = build_caption(item, search_name, deal, label, seller, with_link=False)
-    plain = build_caption(item, search_name, deal, label, seller, with_link=True)
+def notify(item, search_name, deal=None, chats=None, label="Nouveau", silent=False, seller=None, risks=None):
+    caption = build_caption(item, search_name, deal, label, seller, with_link=False, risks=risks)
+    plain = build_caption(item, search_name, deal, label, seller, with_link=True, risks=risks)
     buttons = [{"text": "Acheter", "url": item_url(item)}]
     profile = seller_of(item)[2]
     if profile:
@@ -698,7 +724,7 @@ def run_cycle(client, seen, initialized, market_cache=None):
                               "pas d’avis possibles", ", ".join(sorted(item.keys())))
                 stats = client.seller_stats(uid)
             notify(item, s["name"], deal, chats, label=label,
-                   silent=SILENT_NEW and label == "Nouveau", seller=stats)
+                   silent=SILENT_NEW and label == "Nouveau", seller=stats, risks=fake_risk(item, s, deal))
             new += 1
             important += label != "Nouveau"
             time.sleep(1.1)  # on reste sous la limite d'envoi de Telegram
