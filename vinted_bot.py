@@ -106,14 +106,24 @@ SEARCHES = [
         "bargain_keywords": ["coldgear", "cold gear"],
     },
     {
-        "name": "Nike tech",  # même chose, orthographe avec espace
-        "search_text": "Nike tech",
-        "brand": "Nike",
+        "name": "UA Cold Gear",  # même chose, orthographe avec espace
+        "search_text": "under armour cold gear",
+        "brand": "under armour",
         "price_from": 1,
-        "price_to": 6,
+        "price_to": 50,
         "include": JACKET_WORDS,
         "exclude": SKIP_WORDS,
-        "bargain_keywords": ["Nike tech, Nike tech"],
+        "bargain_keywords": ["coldgear", "cold gear"],
+    },
+    {
+        "name": "Nike Tech",
+        "search_text": "nike tech",
+        "brand": "nike",
+        "price_from": 1,
+        "price_to": 6,
+        "include": ["tech"],
+        "exclude": SKIP_WORDS,
+        "bargain_keywords": ["tech"],  # entre 1 et 6 € : tout Nike Tech est un « BON PLAN » (alerte qui sonne)
     },
 ]
 
@@ -127,7 +137,6 @@ PER_PAGE = 20             # annonces lues par recherche et par tour (plus c'est 
 # des annonces récentes de la même recherche (sans plafond de prix, "price_from" conservé).
 MIN_DISCOUNT = 25         # % minimum sous le prix du marché pour être une "bonne offre"
                           # réglable par recherche avec la clé "min_discount"
-FAKE_PRICE_DROP = 60      # prix au moins 60 % sous le marché : signalé comme risque de contrefaçon
 ALERT_ALL_NEW = True      # True : toutes les nouvelles annonces + les bonnes offres mises en avant
                           # False : seulement les bonnes offres (réglable par recherche : "all_new")
 SILENT_NEW = True         # les annonces normales arrivent sans son, les alertes importantes sonnent
@@ -427,11 +436,9 @@ def fmt_price(amount, symbol):
 BANNER_BAR = "━" * 18
 
 
-def fake_risk(item, s, deal=None):
+def fake_risk(item, s):
     """Signaux de contrefaçon possibles (phrases courtes). C'est une aide, pas une preuve."""
     risks = []
-    if deal and deal[0] >= FAKE_PRICE_DROP:
-        risks.append(f"prix {deal[0]} % sous le marché")
     box = item.get("item_box") if isinstance(item.get("item_box"), dict) else {}
     brand = item.get("brand_title") or box.get("first_line")
     if s.get("brand") and brand and normalize(s["brand"]) not in normalize(brand):
@@ -724,7 +731,7 @@ def run_cycle(client, seen, initialized, market_cache=None):
                               "pas d’avis possibles", ", ".join(sorted(item.keys())))
                 stats = client.seller_stats(uid)
             notify(item, s["name"], deal, chats, label=label,
-                   silent=SILENT_NEW and label == "Nouveau", seller=stats, risks=fake_risk(item, s, deal))
+                   silent=SILENT_NEW and label == "Nouveau", seller=stats, risks=fake_risk(item, s))
             new += 1
             important += label != "Nouveau"
             time.sleep(1.1)  # on reste sous la limite d'envoi de Telegram
