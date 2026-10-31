@@ -107,7 +107,7 @@ SEARCHES = [
     },
     {
         "name": "Nike tech",  # même chose, orthographe avec espace
-        "search_text": "Nike tech
+        "search_text": "Nike tech"
         "brand": "under armour",
         "price_from": 1,
         "price_to": 6,
