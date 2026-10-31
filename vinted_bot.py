@@ -72,49 +72,8 @@ JACKET_WORDS = ["veste", "jacket", "blouson", "doudoune", "coupe-vent", "coupe v
                 "parka", "manteau", "softshell", "gilet", "reactor", "infrared", "storm", "full zip"]
 
 SEARCHES = [
-    {
-        "name": "Nike Phenom",
-        "search_text": "nike phenom",
-        "brand": "nike",  # marque attendue : une autre marque déclarée est signalée comme suspecte
-        "price_from": 1,
-        "price_to": 50,
-        "include": ["phenom"],     # le titre doit contenir un de ces mots
-        "exclude": SKIP_WORDS,     # ...et aucun de ceux-là
-        "bargain_keywords": ["phenom"],  # bon plan : article de ces mots à BARGAIN_MAX € ou moins
-        # "market_deals": False,   # optionnel : ne pas comparer au prix du marché
-        # "chat_id": "987654321",  # optionnel : envoyer cette recherche à d'autres personnes
-        # "url": "https://www.vinted.fr/catalog?...",  # optionnel : adresse copiée depuis le site (catégorie, taille...)
-    },
-    {
-        "name": "Nike running",
-        "search_text": "nike running",
-        "brand": "nike",
-        "price_from": 1,
-        "price_to": 50,
-        "include": RUNNING_WORDS + CLOTHING_WORDS,   # un mot running OU un type de vêtement
-        "exclude": SKIP_WORDS,
-        "bargain_keywords": ["phenom", "aeroswift", "aeroloft", "run division", "storm-fit"],
-    },
-    {
-        "name": "UA ColdGear",
-        "search_text": "under armour coldgear",
-        "brand": "under armour",
-        "price_from": 1,
-        "price_to": 50,
-        "include": JACKET_WORDS,
-        "exclude": SKIP_WORDS,
-        "bargain_keywords": ["coldgear", "cold gear"],
-    },
-    {
-        "name": "UA Cold Gear",  # même chose, orthographe avec espace
-        "search_text": "under armour cold gear",
-        "brand": "under armour",
-        "price_from": 1,
-        "price_to": 50,
-        "include": JACKET_WORDS,
-        "exclude": SKIP_WORDS,
-        "bargain_keywords": ["coldgear", "cold gear"],
-    },
+
+
     {
         "name": "Nike Tech",
         "search_text": "nike tech",
