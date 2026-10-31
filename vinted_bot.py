@@ -106,14 +106,14 @@ SEARCHES = [
         "bargain_keywords": ["coldgear", "cold gear"],
     },
     {
-        "name": "UA Cold Gear",  # même chose, orthographe avec espace
-        "search_text": "under armour cold gear",
+        "name": "Nike tech",  # même chose, orthographe avec espace
+        "search_text": "Nike tech
         "brand": "under armour",
         "price_from": 1,
-        "price_to": 50,
+        "price_to": 6,
         "include": JACKET_WORDS,
         "exclude": SKIP_WORDS,
-        "bargain_keywords": ["coldgear", "cold gear"],
+        "bargain_keywords": ["Nike tech, Nike tech"],
     },
 ]
 
