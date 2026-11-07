@@ -41,7 +41,7 @@ except ImportError:
 # ───────────────────────────── CONFIGURATION ─────────────────────────────
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8694226548:AAE3aeMPbl27AC-v5tcA903iDC0YPfn4OME")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7446117467, -1004446820442")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7446117467")
 
 DOMAIN = "www.vinted.fr"  # www.vinted.be, www.vinted.es, ...
 
@@ -62,29 +62,26 @@ SKIP_WORDS = [
     "lunette", "montre",
     "enfant", "kids", "junior", "garçon", "fille", "bébé", "ans",
 ] + FAKE_WORDS
-# Mots obligatoires : le titre doit en contenir au moins un. Listes de départ : complète-les.
-RUNNING_WORDS = ["run", "course", "phenom", "aeroswift", "aeroloft", "adv", "storm-fit", "windrunner",
-                 "repel", "tempo", "challenger", "flex stride", "element", "miler", "therma"]
-CLOTHING_WORDS = ["veste", "pantalon", "short", "legging", "collant", "t-shirt", "tee", "maillot", "haut",
-                  "sweat", "hoodie", "gilet", "coupe-vent", "coupe vent", "jogging", "survetement", "polo",
-                  "manches", "jacket", "pants", "tights", "top"]
-JACKET_WORDS = ["veste", "jacket", "blouson", "doudoune", "coupe-vent", "coupe vent", "windbreaker",
-                "parka", "manteau", "softshell", "gilet", "reactor", "infrared", "storm", "full zip"]
-
+# Une recherche = un bloc { }. Pour en ajouter une, copie le bloc ; pour en supprimer une, efface-le.
 SEARCHES = [
-
-
     {
-        "name": "Nike Tech",
-        "search_text": "nike tech",
-        "brand": "nike",
+        "name": "Pull Nike Tech",
+        "search_text": ["pull nike tech", "pull tech"],  # deux requêtes, une seule recherche (résultats fusionnés)
+        "brand": "nike",  # marque attendue : une autre marque déclarée est signalée comme suspecte
         "price_from": 1,
-        "price_to": 6,
-        "include": ["tech"],
-        "exclude": SKIP_WORDS,
-        "bargain_keywords": ["tech"],  # entre 1 et 6 € : tout Nike Tech est un « BON PLAN » (alerte qui sonne)
+        "price_to": 30,
+        "include": ["tech"],     # le titre doit contenir un de ces mots
+        "exclude": SKIP_WORDS,   # ...et aucun de ceux-là
+        "min_seller_stars": 4,   # écarte les vendeurs à 3 étoiles ou moins (les vendeurs sans avis sont gardés)
+        "bargain_keywords": ["tech"],  # à BARGAIN_MAX € ou moins : « BON PLAN » (alerte qui sonne)
+        # "active": False,         # optionnel : désactive cette recherche sans la supprimer
+        # "market_deals": False,   # optionnel : ne pas comparer au prix du marché
+        # "chat_id": "987654321",  # optionnel : envoyer cette recherche à d'autres personnes
+        # "url": "https://www.vinted.fr/catalog?...",  # optionnel : adresse copiée depuis le site (catégorie, taille...)
     },
 ]
+ALL_SEARCHES = SEARCHES  # toutes les recherches du fichier
+SEARCHES = [s for s in ALL_SEARCHES if s.get("active", True)]  # seules les recherches actives tournent
 
 CYCLE_DELAY = (15, 30)    # pause entre deux tours complets (secondes) ; si Vinted bloque souvent, augmente-la
 SEARCH_DELAY = (1, 3)     # pause entre deux recherches d'un même tour
@@ -371,6 +368,11 @@ def cost_breakdown(item, amount):
     return fee, shipping, amount + fee + shipping, estimated
 
 
+def stars_of(note):
+    """Nombre d'étoiles affichées (0 à 5) pour une note : même arrondi que l'affichage."""
+    return max(0, min(5, int(note + 0.5)))
+
+
 def fmt_rating(note, count):
     """Avis du vendeur en étoiles : ★★★★☆ 4,4 (437 avis)."""
     if not count:
@@ -520,6 +522,8 @@ def load_state():
         seen, initialized = set(data.get("seen", [])), set(data.get("initialized", []))
         if data.get("per_page", 20) < PER_PAGE:  # pages plus grandes : on mémorise sans alerter
             initialized = set()
+        if "active" in data:  # recherche absente au dernier lancement : on mémorise sans alerter
+            initialized &= set(data["active"])
         return seen, initialized
     except (OSError, ValueError):
         return set(), set()
@@ -528,7 +532,8 @@ def load_state():
 def save_state(seen, initialized):
     recent = sorted(seen)[-5000:]  # les ids Vinted augmentent : on garde les plus récents
     STATE_FILE.write_text(
-        json.dumps({"seen": recent, "initialized": sorted(initialized), "per_page": PER_PAGE}),
+        json.dumps({"seen": recent, "initialized": sorted(initialized), "per_page": PER_PAGE,
+                    "active": sorted(x["name"] for x in SEARCHES)}),
         encoding="utf-8",
     )
 
@@ -578,18 +583,36 @@ def explain_filters(item, s):
     return True, "retenue"
 
 
+def explain_item(item, s):
+    """Comme explain_filters, avec en plus la fourchette de prix (price_from / price_to) de la recherche."""
+    ok, reason = explain_filters(item, s)
+    if not ok:
+        return ok, reason
+    amount = parse_amount(item.get("price"))
+    if amount is not None and (amount > s.get("price_to", float("inf")) or amount < s.get("price_from", 0)):
+        return False, "prix hors fourchette"
+    return True, "retenue"
+
+
 def passes_filters(item, s):
     """Le titre contient-il un mot obligatoire ("include") et aucun mot interdit ("exclude") ?"""
     return explain_filters(item, s)[0]
 
 
-def build_params(s, for_market=False):
+def queries_of(s):
+    """Liste des requêtes d'une recherche : "search_text" peut être un texte ou une liste de textes."""
+    text = s.get("search_text")
+    return [q for q in (text if isinstance(text, (list, tuple)) else [text]) if q] or [None]
+
+
+def build_params(s, for_market=False, query=None):
     """Paramètres de recherche. for_market=True : sans plafond de prix (calcul du prix du marché)."""
     params = {"order": "newest_first", "per_page": PER_PAGE, "page": 1}
     if s.get("url"):
         params.update(params_from_url(s["url"]))
-    if s.get("search_text"):
-        params["search_text"] = s["search_text"]
+    text = query or queries_of(s)[0]
+    if text:
+        params["search_text"] = text
     for key in ("price_from", "price_to"):
         if key in s:
             params[key] = s[key]
@@ -597,6 +620,29 @@ def build_params(s, for_market=False):
         params.pop("price_to", None)
     params.update(s.get("extra", {}))
     return {k: v for k, v in params.items() if v not in (None, "")}  # filtres vides = erreur 400
+
+
+def fetch_items(client, s):
+    """Annonces de toutes les requêtes de la recherche, sans doublons. Une requête en erreur n'empêche pas les autres."""
+    items, ids, last_error = [], set(), None
+    for i, query in enumerate(queries_of(s)):
+        if i:
+            time.sleep(random.uniform(*SEARCH_DELAY))
+        try:
+            found = client.search(build_params(s, query=query))
+        except Blocked:
+            raise
+        except Exception as e:
+            last_error = e
+            warn_once(f"search-{s['name']}-{type(e).__name__}", "Recherche « %s » en erreur : %s", s["name"], e)
+            continue
+        for item in found:
+            if item.get("id") not in ids:
+                ids.add(item.get("id"))
+                items.append(item)
+    if not items and last_error:
+        raise last_error
+    return items
 
 
 def get_market_price(client, s, cache):
@@ -633,7 +679,7 @@ def run_cycle(client, seen, initialized, market_cache=None):
             time.sleep(random.uniform(*SEARCH_DELAY))
 
         try:
-            items = client.search(build_params(s))
+            items = fetch_items(client, s)
         except Blocked:
             raise
         except Exception as e:  # une recherche en erreur ne doit pas bloquer les autres
@@ -646,7 +692,8 @@ def run_cycle(client, seen, initialized, market_cache=None):
         bargain_max = s.get("bargain_max", BARGAIN_MAX)
         bargain_words = s.get("bargain_keywords", [])
         chats = parse_chat_ids(s["chat_id"]) if s.get("chat_id") else None
-        new = important = filtered = 0
+        new = important = filtered = low_rated = 0
+        min_stars = s.get("min_seller_stars")
 
         for item in items:
             if item.get("id") is None:
@@ -657,7 +704,7 @@ def run_cycle(client, seen, initialized, market_cache=None):
             if first_time:
                 seen.add(item_id)
                 continue
-            if not passes_filters(item, s):  # pas le bon type d'article
+            if not explain_item(item, s)[0]:  # pas le bon type d'article, ou prix hors fourchette
                 seen.add(item_id)
                 filtered += 1
                 continue
@@ -683,12 +730,19 @@ def run_cycle(client, seen, initialized, market_cache=None):
 
             label = "BON PLAN" if is_bargain else "BONNE OFFRE" if is_deal else "Nouveau"
             stats = None
-            if SELLER_STATS_ALL or label != "Nouveau":
+            if SELLER_STATS_ALL or label != "Nouveau" or min_stars:
                 uid = seller_of(item)[0]
                 if uid is None:
                     warn_once("no-seller", "Les annonces ne contiennent pas le vendeur (champs reçus : %s) : "
                               "pas d’avis possibles", ", ".join(sorted(item.keys())))
                 stats = client.seller_stats(uid)
+            if min_stars:
+                if stats is None:
+                    warn_once("no-stars-filter", "Filtre des avis vendeur impossible : avis indisponibles, "
+                              "les annonces passent sans ce filtre (lance python vinted_bot.py --debug)")
+                elif stats[1] > 0 and stars_of(stats[0]) < min_stars:
+                    low_rated += 1
+                    continue  # vendeur mal noté
             notify(item, s["name"], deal, chats, label=label,
                    silent=SILENT_NEW and label == "Nouveau", seller=stats, risks=fake_risk(item, s))
             new += 1
@@ -700,6 +754,8 @@ def run_cycle(client, seen, initialized, market_cache=None):
             "%s : %d résultats, %d écartés par les filtres, %d alerte(s) dont %d importante(s)%s",
             s["name"], len(items), filtered, new, important, " (initialisation)" if first_time else "",
         )
+        if low_rated:
+            log.info("%s : %d annonce(s) écartée(s), vendeur à %d étoiles ou moins", s["name"], low_rated, min_stars - 1)
 
 
 def debug_vinted():
@@ -738,7 +794,7 @@ def check_searches():
         if i:
             time.sleep(random.uniform(*SEARCH_DELAY))
         try:
-            items = client.search(build_params(s))
+            items = fetch_items(client, s)
         except Blocked:
             raise
         except Exception as e:
@@ -747,7 +803,7 @@ def check_searches():
         print(f"\n=== {s['name']} : {len(items)} annonces trouvées par Vinted ===")
         kept = 0
         for item in items:
-            ok, reason = explain_filters(item, s)
+            ok, reason = explain_item(item, s)
             kept += ok
             amount, _ = parse_price(item)
             price = fmt_price(amount, "€") if amount is not None else "?"
@@ -760,6 +816,8 @@ def describe_searches():
     lines = []
     for s in SEARCHES:
         params = build_params(s)
+        if len(queries_of(s)) > 1:
+            params["search_text"] = " + ".join(queries_of(s))
         shown = ", ".join(f"{k}={v}" for k, v in params.items() if k not in ("order", "per_page", "page"))
         lines.append(f"Recherche « {s['name']} » : {shown} | mots obligatoires : {len(s.get('include') or [])}"
                      f" | mots interdits : {len(s.get('exclude') or [])}")
