@@ -66,7 +66,8 @@ SKIP_WORDS = [
 SEARCHES = [
     {
         "name": "Pull Nike Tech",
-        "search_text": ["pull nike tech", "pull tech"],  # deux requêtes, une seule recherche (résultats fusionnés)
+        "search_text": ["pull nike tech", "pull tech", "pull nike tech kangourou", "pull nike tech aviateur"],
+                       # quatre requêtes, une seule recherche (résultats fusionnés, sans doublons)
         "brand": "nike",  # marque attendue : une autre marque déclarée est signalée comme suspecte
         "price_from": 1,
         "price_to": 30,
@@ -78,6 +79,18 @@ SEARCHES = [
         # "market_deals": False,   # optionnel : ne pas comparer au prix du marché
         # "chat_id": "987654321",  # optionnel : envoyer cette recherche à d'autres personnes
         # "url": "https://www.vinted.fr/catalog?...",  # optionnel : adresse copiée depuis le site (catégorie, taille...)
+    },
+    {
+        "name": "Nike Tech 10 €",
+        "search_text": "nike tech",
+        "brand": "nike",
+        "price_from": 1,
+        "price_to": 10,
+        "include": ["tech"],
+        "exclude": SKIP_WORDS,
+        "bargain_keywords": ["tech"],  # à 10 € ou moins : « BON PLAN » (alerte qui sonne)
+        "bargain_max": 10,
+        # "min_seller_stars": 4,   # optionnel : écarter les vendeurs à 3 étoiles ou moins
     },
 ]
 ALL_SEARCHES = SEARCHES  # toutes les recherches du fichier
