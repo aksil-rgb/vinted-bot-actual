@@ -81,7 +81,7 @@ SEARCHES = [
         # "url": "https://www.vinted.fr/catalog?...",  # optionnel : adresse copiée depuis le site (catégorie, taille...)
     },
     {
-        "name": "Nike Tech 10 €",
+        "name": "Nike Tech",
         "search_text": "nike tech",
         "brand": "nike",
         "price_from": 1,
