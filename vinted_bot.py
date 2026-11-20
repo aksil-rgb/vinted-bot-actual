@@ -64,22 +64,7 @@ SKIP_WORDS = [
 ] + FAKE_WORDS
 # Une recherche = un bloc { }. Pour en ajouter une, copie le bloc ; pour en supprimer une, efface-le.
 SEARCHES = [
-    {
-        "name": "Pull Nike Tech",
-        "search_text": ["pull nike tech", "pull tech", "pull nike tech kangourou", "pull nike tech aviateur"],
-                       # quatre requêtes, une seule recherche (résultats fusionnés, sans doublons)
-        "brand": "nike",  # marque attendue : une autre marque déclarée est signalée comme suspecte
-        "price_from": 1,
-        "price_to": 30,
-        "include": ["tech"],     # le titre doit contenir un de ces mots
-        "exclude": SKIP_WORDS,   # ...et aucun de ceux-là
-        "min_seller_stars": 4,   # écarte les vendeurs à 3 étoiles ou moins (les vendeurs sans avis sont gardés)
-        "bargain_keywords": ["tech"],  # à BARGAIN_MAX € ou moins : « BON PLAN » (alerte qui sonne)
-        # "active": False,         # optionnel : désactive cette recherche sans la supprimer
-        # "market_deals": False,   # optionnel : ne pas comparer au prix du marché
-        # "chat_id": "987654321",  # optionnel : envoyer cette recherche à d'autres personnes
-        # "url": "https://www.vinted.fr/catalog?...",  # optionnel : adresse copiée depuis le site (catégorie, taille...)
-    },
+    
     {
         "name": "Nike Tech",
         "search_text": "nike tech",
